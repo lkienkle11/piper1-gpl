@@ -7,136 +7,139 @@ import logging
 import time
 import wave
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Mapping, Optional
 from urllib.request import urlopen
 
-from flask import Flask, render_template, request
+from flask import Flask, Response, jsonify, render_template, request
 
 from . import PiperVoice, SynthesisConfig
 from .download_voices import VOICES_JSON, download_voice
+from .voice_selection import (
+    TextAnalyzer,
+    catalog_entry_from_config,
+    normalize_voice_catalog,
+)
 
 _LOGGER = logging.getLogger()
+_CATALOG_TTL_SECONDS = 60 * 60
 
 
-def main() -> None:
-    """Run HTTP server."""
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--host", default="0.0.0.0", help="HTTP server host")
-    parser.add_argument("--port", type=int, default=5000, help="HTTP server port")
-    #
-    parser.add_argument("-m", "--model", required=True, help="Path to Onnx model file")
-    #
-    parser.add_argument("-s", "--speaker", type=int, help="Id of speaker (default: 0)")
-    parser.add_argument(
-        "--length-scale", "--length_scale", type=float, help="Phoneme length"
-    )
-    parser.add_argument(
-        "--noise-scale", "--noise_scale", type=float, help="Generator noise"
-    )
-    parser.add_argument(
-        "--noise-w-scale",
-        "--noise_w_scale",
-        "--noise-w",
-        "--noise_w",
-        type=float,
-        help="Phoneme width noise",
-    )
-    #
-    parser.add_argument("--cuda", action="store_true", help="Use GPU")
-    #
-    parser.add_argument(
-        "--sentence-silence",
-        "--sentence_silence",
-        type=float,
-        default=0.0,
-        help="Seconds of silence after each sentence",
-    )
-    #
-    parser.add_argument(
-        "--data-dir",
-        "--data_dir",
-        action="append",
-        default=[str(Path.cwd())],
-        help="Data directory to check for downloaded models (default: current directory)",
-    )
-    parser.add_argument(
-        "--download-dir",
-        "--download_dir",
-        help="Path to download voices (default: first data dir)",
-    )
-    #
-    parser.add_argument(
-        "--debug", action="store_true", help="Print DEBUG messages to console"
-    )
-    args = parser.parse_args()
-    logging.basicConfig(level=logging.DEBUG if args.debug else logging.INFO)
-    _LOGGER.debug(args)
+def _fetch_voice_catalog() -> Mapping[str, Mapping[str, Any]]:
+    with urlopen(VOICES_JSON) as response:
+        return json.load(response)
 
-    if not args.download_dir:
-        # Download voices to first data directory if not specified
-        args.download_dir = args.data_dir[0]
 
-    download_dir = Path(args.download_dir)
+def _json_error(message: str, code: str, status: int) -> tuple[Response, int]:
+    return jsonify({"error": code, "message": message}), status
 
-    # Download voice if file doesn't exist
-    model_path = Path(args.model)
-    if not model_path.exists():
-        # Look in data directories
-        voice_name = args.model
-        for data_dir in args.data_dir:
-            maybe_model_path = Path(data_dir) / f"{voice_name}.onnx"
-            _LOGGER.debug("Checking '%s'", maybe_model_path)
-            if maybe_model_path.exists():
-                model_path = maybe_model_path
-                break
 
-    if not model_path.exists():
-        raise ValueError(
-            f"Unable to find voice: {model_path} (use piper.download_voices)"
-        )
-
-    default_model_id = model_path.name.rstrip(".onnx")
-
-    # Load voice
-    default_voice = PiperVoice.load(
-        model_path, use_cuda=args.cuda, include_alignments=True
-    )
+def create_app(
+    args: argparse.Namespace,
+    model_path: Path,
+    default_voice: PiperVoice,
+    *,
+    catalog_fetcher: Callable[[], Mapping[str, Mapping[str, Any]]] = (
+        _fetch_voice_catalog
+    ),
+    voice_loader: Callable[..., PiperVoice] = PiperVoice.load,
+) -> Flask:
+    """Create the Piper HTTP application."""
+    default_model_id = model_path.name.removesuffix(".onnx")
     loaded_voices: Dict[str, PiperVoice] = {default_model_id: default_voice}
+    data_dirs = [Path(data_dir) for data_dir in args.data_dir]
+    download_dir = Path(args.download_dir)
+    if download_dir not in data_dirs:
+        data_dirs.append(download_dir)
 
-    # Create web server.
-    # Images live in the "img" directory and are served under "/img".
     app = Flask(__name__, static_folder="img", static_url_path="/img")
-
-    # Info about the most recently synthesized utterance (for the web page).
     last_synthesis: Dict[str, Any] = {}
+    analyzer = TextAnalyzer()
+    catalog_cache: Dict[str, Any] = {
+        "loaded_at": 0.0,
+        "voices": {},
+        "error": None,
+    }
+
+    def get_installed_configs() -> Dict[str, Dict[str, Any]]:
+        config_paths = [Path(f"{model_path}.json")]
+        for data_dir in data_dirs:
+            for onnx_path in data_dir.glob("*.onnx"):
+                config_path = Path(f"{onnx_path}.json")
+                if config_path.exists():
+                    config_paths.append(config_path)
+
+        installed: Dict[str, Dict[str, Any]] = {}
+        for config_path in config_paths:
+            model_id = config_path.name.removesuffix(".onnx.json")
+            if model_id in installed or not config_path.exists():
+                continue
+
+            with open(config_path, "r", encoding="utf-8") as config_file:
+                installed[model_id] = json.load(config_file)
+
+        return installed
+
+    def get_catalog() -> tuple[List[Dict[str, Any]], bool, Optional[str]]:
+        installed_configs = get_installed_configs()
+        installed_ids = set(installed_configs)
+        now = time.monotonic()
+        if (
+            not catalog_cache["voices"]
+            or (now - catalog_cache["loaded_at"]) >= _CATALOG_TTL_SECONDS
+        ):
+            try:
+                catalog_cache["voices"] = dict(catalog_fetcher())
+                catalog_cache["loaded_at"] = now
+                catalog_cache["error"] = None
+            except Exception as err:  # network errors must not hide installed voices
+                _LOGGER.warning("Unable to load voice catalog: %s", err)
+                catalog_cache["loaded_at"] = now
+                catalog_cache["error"] = str(err)
+
+        raw_catalog = catalog_cache["voices"]
+        voices = normalize_voice_catalog(raw_catalog, installed_ids)
+        known_ids = {voice["key"] for voice in voices}
+        for model_id, config in installed_configs.items():
+            if model_id not in known_ids:
+                voices.append(catalog_entry_from_config(model_id, config))
+
+        voices.sort(
+            key=lambda voice: (
+                voice["language"]["name_english"],
+                voice["language"]["code"],
+                voice["name"],
+                voice["quality"],
+                voice["key"],
+            )
+        )
+        return voices, bool(raw_catalog), catalog_cache["error"]
+
+    def analyze_text(text: str) -> Dict[str, Any]:
+        voices, catalog_available, catalog_error = get_catalog()
+        result = analyzer.analyze(text, voices, default_model_id)
+        result["catalog_available"] = catalog_available
+        result["catalog_error"] = catalog_error
+        return result
+
+    def find_model(model_id: str) -> Optional[Path]:
+        if model_id == default_model_id:
+            return model_path
+
+        for data_dir in data_dirs:
+            maybe_model_path = data_dir / f"{model_id}.onnx"
+            if maybe_model_path.exists():
+                return maybe_model_path
+
+        return None
 
     @app.route("/", methods=["GET"])
     def app_index() -> str:
-        """Web page for testing a voice in the browser."""
+        """Web page for testing voices in the browser."""
         return render_template("index.html")
 
     @app.route("/info", methods=["GET"])
     def app_info() -> Dict[str, Any]:
-        """Info about the current voice and most recently synthesized utterance.
-
-        Outputs a JSON object with the format:
-        {
-          "voice": {
-            "name": "<voice name>",
-            "language": "<espeak voice/alphabet>",
-            "num_speakers": <number of speakers>
-          },
-          "last": {                            (null until something is synthesized)
-            "text": "<synthesized text>",
-            "synthesize_seconds": <wall-clock synthesis time>,
-            "phonemes": ["<phoneme>", ...],
-            "alignments": [
-              { "phoneme": "<phoneme>", "seconds": <duration> },
-              ...
-            ]
-          }
-        }
-        """
+        """Return default voice and most recent synthesis information."""
         return {
             "voice": {
                 "name": default_model_id,
@@ -148,106 +151,131 @@ def main() -> None:
 
     @app.route("/voices", methods=["GET"])
     def app_voices() -> Dict[str, Any]:
-        """List downloaded voices.
-
-        Outputs a JSON object with the format:
-        {
-          "<voice name>": { <voice config> },
-          ...
-        }
-
-        for each voice in your data directories.
-        """
-        voices_dict: Dict[str, Any] = {}
-        config_paths: List[Path] = [Path(f"{model_path}.json")]
-
-        for data_dir in args.data_dir:
-            for onnx_path in Path(data_dir).glob("*.onnx"):
-                config_path = Path(f"{onnx_path}.json")
-                if config_path.exists():
-                    config_paths.append(config_path)
-
-        for config_path in config_paths:
-            model_id = config_path.name.rstrip(".onnx.json")
-            if model_id in voices_dict:
-                continue
-
-            with open(config_path, "r", encoding="utf-8") as config_file:
-                voices_dict[model_id] = json.load(config_file)
-
-        return voices_dict
+        """List downloaded voice configuration files."""
+        return get_installed_configs()
 
     @app.route("/all-voices", methods=["GET"])
-    def app_all_voices() -> Dict[str, Any]:
-        """List all Piper voices.
+    def app_all_voices() -> Any:
+        """List all voices from the Piper catalog."""
+        try:
+            voices = dict(catalog_fetcher())
+            catalog_cache.update(loaded_at=time.monotonic(), voices=voices, error=None)
+            return voices
+        except Exception as err:
+            _LOGGER.warning("Unable to load voice catalog: %s", err)
+            return _json_error(str(err), "catalog_unavailable", 503)
 
-        Outputs voices.json from the piper-voices repo on HuggingFace.
-        See: https://huggingface.co/rhasspy/piper-voices
-        """
-        with urlopen(VOICES_JSON) as response:
-            return json.load(response)
-
-    @app.route("/download", methods=["POST"])
-    def app_download() -> str:
-        """Download a voice.
-
-        Downloads the .onnx and .onnx.json file from piper-voices repo on HuggingFace.
-        See: https://huggingface.co/rhasspy/piper-voices
-
-        Expects a JSON object with the format:
-        {
-          "voice": "<voice name>",   (required)
-          "force_redownload": false  (optional)
+    @app.route("/voice-catalog", methods=["GET"])
+    def app_voice_catalog() -> Dict[str, Any]:
+        """Return normalized catalog and local installation status."""
+        voices, available, error = get_catalog()
+        return {
+            "voices": voices,
+            "catalog_available": available,
+            "catalog_error": error,
         }
 
-        Returns the name of the voice.
-        Voice format must be <language>-<name>-<quality> like "en_US-lessac-medium".
-        """
-        data = json.loads(request.data)
-        model_id = data.get("voice")
-        if not model_id:
-            raise ValueError("voice is required")
+    @app.route("/analyze", methods=["POST"])
+    def app_analyze() -> Any:
+        """Analyze text and resolve an automatic voice/prosody profile."""
+        data = request.get_json(silent=True) or {}
+        text = str(data.get("text", "")).strip()
+        if not text:
+            return _json_error("No text provided", "invalid_text", 400)
 
-        force_redownload = data.get("force_redownload", False)
-        download_voice(model_id, download_dir, force_redownload=force_redownload)
+        try:
+            return analyze_text(text)
+        except (TypeError, ValueError) as err:
+            return _json_error(str(err), "analysis_failed", 400)
+
+    @app.route("/download", methods=["POST"])
+    def app_download() -> Any:
+        """Download a voice model and configuration file."""
+        data = request.get_json(silent=True) or {}
+        model_id = str(data.get("voice", "")).strip()
+        if not model_id:
+            return _json_error("voice is required", "invalid_voice", 400)
+
+        try:
+            download_voice(
+                model_id,
+                download_dir,
+                force_redownload=bool(data.get("force_redownload", False)),
+            )
+        except (OSError, ValueError) as err:
+            return _json_error(str(err), "download_failed", 400)
 
         return model_id
 
     @app.route("/synthesize", methods=["POST"])
-    def app_synthesize() -> bytes:
-        """Synthesize audio from text.
+    def app_synthesize() -> Any:
+        """Synthesize audio with legacy, automatic, or manual voice selection."""
+        data = request.get_json(silent=True) or {}
+        mode = data.get("mode")
+        if mode not in (None, "auto", "manual"):
+            return _json_error("mode must be auto or manual", "invalid_mode", 400)
 
-        Expects a JSON object with the format:
-        {
-          "text": "Text to speak.",      (required)
-          "voice": "<voice name>",       (optional)
-          "speaker": "<speaker name>",   (optional)
-          "speaker_id": "<speaker id>",  (optional, overrides speaker)
-          "length_scale": 1.0,           (optional)
-          "noise_scale": 0.667,          (optional)
-          "length_w_scale": 0.8          (optional)
-        }
-        """
-        data = json.loads(request.data)
-        text = data.get("text", "").strip()
+        text = str(data.get("text", "")).strip()
         if not text:
-            raise ValueError("No text provided")
+            if mode is None:
+                raise ValueError("No text provided")
+            return _json_error("No text provided", "invalid_text", 400)
 
-        _LOGGER.debug(data)
+        analysis: Optional[Dict[str, Any]] = None
+        if mode == "auto":
+            try:
+                analysis = analyze_text(text)
+            except (TypeError, ValueError) as err:
+                return _json_error(str(err), "analysis_failed", 400)
 
-        model_id = data.get("voice", default_model_id)
+            selected_voice = analysis.get("voice")
+            if not selected_voice:
+                return _json_error(
+                    "No voice is available for the detected language",
+                    "voice_unavailable",
+                    400,
+                )
+
+            model_id = selected_voice["key"]
+            if not selected_voice.get("installed"):
+                return (
+                    jsonify(
+                        {
+                            "error": "voice_not_installed",
+                            "message": (
+                                f"Voice '{model_id}' must be downloaded before synthesis"
+                            ),
+                            "voice": selected_voice,
+                        }
+                    ),
+                    409,
+                )
+        elif mode == "manual":
+            model_id = str(data.get("voice", "")).strip()
+            if not model_id:
+                return _json_error(
+                    "voice is required in manual mode", "invalid_voice", 400
+                )
+        else:
+            model_id = str(data.get("voice", default_model_id))
+
         voice = loaded_voices.get(model_id)
-        if voice is None:
-            for data_dir in args.data_dir:
-                maybe_model_path = Path(data_dir) / f"{model_id}.onnx"
-                if maybe_model_path.exists():
-                    _LOGGER.debug("Loading voice %s", model_id)
-                    voice = PiperVoice.load(maybe_model_path, use_cuda=args.cuda)
-                    loaded_voices[model_id] = voice
-                    break
+        selected_model_path = find_model(model_id)
+        if voice is None and selected_model_path is not None:
+            _LOGGER.debug("Loading voice %s", model_id)
+            voice = voice_loader(selected_model_path, use_cuda=args.cuda)
+            loaded_voices[model_id] = voice
 
         if voice is None:
+            if mode in ("auto", "manual"):
+                return _json_error(
+                    f"Voice '{model_id}' must be downloaded before synthesis",
+                    "voice_not_installed",
+                    409,
+                )
+
             _LOGGER.warning("Voice not found: %s. Using default voice.", model_id)
+            model_id = default_model_id
             voice = default_voice
 
         speaker_id: Optional[int] = data.get("speaker_id")
@@ -257,45 +285,58 @@ def main() -> None:
                 speaker_id = voice.config.speaker_id_map.get(speaker)
 
             if speaker_id is None:
-                _LOGGER.warning(
-                    "Speaker not found: '%s' in %s",
-                    speaker,
-                    voice.config.speaker_id_map.keys(),
-                )
+                if speaker:
+                    _LOGGER.warning(
+                        "Speaker not found: '%s' in %s",
+                        speaker,
+                        voice.config.speaker_id_map.keys(),
+                    )
                 speaker_id = args.speaker or voice.config.default_speaker_id
 
-        if (speaker_id is not None) and (speaker_id > voice.config.num_speakers):
-            speaker_id = 0
+        if (speaker_id is not None) and (
+            speaker_id < 0 or speaker_id >= voice.config.num_speakers
+        ):
+            speaker_id = voice.config.default_speaker_id
 
+        auto_prosody = analysis["prosody"] if analysis else {}
         syn_config = SynthesisConfig(
             speaker_id=speaker_id,
             length_scale=float(
                 data.get(
                     "length_scale",
-                    (
-                        args.length_scale
-                        if args.length_scale is not None
-                        else voice.config.length_scale
+                    auto_prosody.get(
+                        "length_scale",
+                        (
+                            args.length_scale
+                            if args.length_scale is not None
+                            else voice.config.length_scale
+                        ),
                     ),
                 )
             ),
             noise_scale=float(
                 data.get(
                     "noise_scale",
-                    (
-                        args.noise_scale
-                        if args.noise_scale is not None
-                        else voice.config.noise_scale
+                    auto_prosody.get(
+                        "noise_scale",
+                        (
+                            args.noise_scale
+                            if args.noise_scale is not None
+                            else voice.config.noise_scale
+                        ),
                     ),
                 )
             ),
             noise_w_scale=float(
                 data.get(
                     "noise_w_scale",
-                    (
-                        args.noise_w_scale
-                        if args.noise_w_scale is not None
-                        else voice.config.noise_w_scale
+                    auto_prosody.get(
+                        "noise_w_scale",
+                        (
+                            args.noise_w_scale
+                            if args.noise_w_scale is not None
+                            else voice.config.noise_w_scale
+                        ),
                     ),
                 )
             ),
@@ -328,8 +369,6 @@ def main() -> None:
                         )
 
                     wav_file.writeframes(audio_chunk.audio_int16_bytes)
-
-                    # Collect phonemes/alignments for the web page
                     phonemes.extend(audio_chunk.phonemes)
                     for alignment in audio_chunk.phoneme_alignments or []:
                         alignments.append(
@@ -340,17 +379,105 @@ def main() -> None:
                             }
                         )
 
-            synthesize_seconds = time.monotonic() - start_time
+            synthesis_details: Dict[str, Any] = {
+                "text": text,
+                "synthesize_seconds": time.monotonic() - start_time,
+                "phonemes": phonemes,
+                "alignments": alignments,
+                "mode": mode or "legacy",
+                "voice": model_id,
+                "speaker_id": speaker_id,
+                "prosody": {
+                    "length_scale": syn_config.length_scale,
+                    "noise_scale": syn_config.noise_scale,
+                    "noise_w_scale": syn_config.noise_w_scale,
+                },
+            }
+            if analysis:
+                synthesis_details.update(
+                    language=analysis["language"],
+                    context=analysis["context"],
+                    emotion=analysis["emotion"],
+                    fallback_reason=analysis["fallback_reason"],
+                )
+
             last_synthesis.clear()
-            last_synthesis.update(
-                text=text,
-                synthesize_seconds=synthesize_seconds,
-                phonemes=phonemes,
-                alignments=alignments,
-            )
+            last_synthesis.update(synthesis_details)
+            return Response(wav_io.getvalue(), mimetype="audio/wav")
 
-            return wav_io.getvalue()
+    return app
 
+
+def main() -> None:
+    """Run HTTP server."""
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--host", default="0.0.0.0", help="HTTP server host")
+    parser.add_argument("--port", type=int, default=5000, help="HTTP server port")
+    parser.add_argument("-m", "--model", required=True, help="Path to Onnx model file")
+    parser.add_argument("-s", "--speaker", type=int, help="Id of speaker (default: 0)")
+    parser.add_argument(
+        "--length-scale", "--length_scale", type=float, help="Phoneme length"
+    )
+    parser.add_argument(
+        "--noise-scale", "--noise_scale", type=float, help="Generator noise"
+    )
+    parser.add_argument(
+        "--noise-w-scale",
+        "--noise_w_scale",
+        "--noise-w",
+        "--noise_w",
+        type=float,
+        help="Phoneme width noise",
+    )
+    parser.add_argument("--cuda", action="store_true", help="Use GPU")
+    parser.add_argument(
+        "--sentence-silence",
+        "--sentence_silence",
+        type=float,
+        default=0.0,
+        help="Seconds of silence after each sentence",
+    )
+    parser.add_argument(
+        "--data-dir",
+        "--data_dir",
+        action="append",
+        default=[str(Path.cwd())],
+        help="Data directory to check for downloaded models (default: current directory)",
+    )
+    parser.add_argument(
+        "--download-dir",
+        "--download_dir",
+        help="Path to download voices (default: first data dir)",
+    )
+    parser.add_argument(
+        "--debug", action="store_true", help="Print DEBUG messages to console"
+    )
+    args = parser.parse_args()
+    logging.basicConfig(level=logging.DEBUG if args.debug else logging.INFO)
+    _LOGGER.debug(args)
+
+    if not args.download_dir:
+        args.download_dir = args.data_dir[0]
+
+    model_path = Path(args.model)
+    if not model_path.exists():
+        voice_name = args.model
+        for data_dir in args.data_dir:
+            maybe_model_path = Path(data_dir) / f"{voice_name}.onnx"
+            _LOGGER.debug("Checking '%s'", maybe_model_path)
+            if maybe_model_path.exists():
+                model_path = maybe_model_path
+                break
+
+    if not model_path.exists():
+        raise ValueError(
+            f"Unable to find voice: {model_path} (use piper.download_voices)"
+        )
+
+    default_voice = PiperVoice.load(
+        model_path, use_cuda=args.cuda, include_alignments=True
+    )
+    app = create_app(args, model_path, default_voice)
     app.run(host=args.host, port=args.port)
 
 

@@ -93,6 +93,8 @@ setup(
         ],
         "http": [
             "flask>=3,<4",
+            "lingua-language-detector>=1.3.5,<1.4; python_version < '3.13'",
+            "lingua-language-detector>=1.4.2,<2; python_version >= '3.13'",
         ],
         "alignment": [
             "onnx>=1,<2",

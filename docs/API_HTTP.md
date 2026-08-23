@@ -1,60 +1,166 @@
-# 🌐 HTTP API
+# HTTP API
 
-Install the necessary dependencies:
+Install the HTTP server and local language detector dependencies:
 
-``` sh
-python3 -m pip install piper-tts[http]
+```sh
+python3 -m pip install 'piper-tts[http]'
 ```
 
-Download a voice, for example:
+Download a default voice, for example:
 
-``` sh
+```sh
 python3 -m piper.download_voices en_US-lessac-medium
 ```
 
 Run the web server:
 
-``` sh
+```sh
 python3 -m piper.http_server -m en_US-lessac-medium
 ```
 
-This will start an HTTP server on port 5000 (use `--host` and `--port` to override).
-If you have voices in a different directory, use `--data-dir <DIR>`
+The server listens on port 5000 by default. Use `--host` and `--port` to
+override it, and `--data-dir <DIR>` to add directories containing voice files.
 
-## Web Interface
+## Web interface
 
-Open [http://localhost:5000](http://localhost:5000) in your browser to test the voice:
-enter some text, click **Speak**, and listen to the result. The page also shows
-information about the voice (name, language, number of speakers) and, for the most
-recently synthesized utterance, the synthesis time along with the phonemes and their
-audio alignments.
+Open [http://localhost:5000](http://localhost:5000). The interface has two
+voice-selection modes:
 
-The same information is available as JSON from the `/info` endpoint:
+* **Auto Detect** detects the dominant language and selects a matching voice.
+  English and Vietnamese also have local context/emotion rules that adjust
+  synthesis prosody. Other languages use punctuation rules and neutral emotion.
+* **Manual Voice** selects language, voice name, quality, and speaker. Voices
+  from the online catalog must be downloaded explicitly before synthesis.
 
-``` sh
-curl localhost:5000/info
+Auto Detect uses one dominant language for the complete text. It does not split
+mixed-language text into multiple voices. Emotion profiles change synthesis
+settings; they do not turn a voice into an emotion-trained model.
+
+## Voice information and catalog
+
+`GET /info` returns the default voice and the most recent synthesis. The `last`
+object includes the actual voice, selection mode, detected language, context,
+emotion, prosody, phonemes, alignments, and synthesis time when available.
+
+`GET /voices` returns raw configuration data for downloaded voices.
+
+`GET /all-voices` returns the raw remote Piper catalog.
+
+`GET /voice-catalog` returns a normalized catalog for clients:
+
+```json
+{
+  "voices": [
+    {
+      "key": "en_US-lessac-medium",
+      "language": {
+        "code": "en_US",
+        "family": "en",
+        "region": "US",
+        "name_native": "English",
+        "name_english": "English",
+        "country_english": "United States"
+      },
+      "name": "lessac",
+      "quality": "medium",
+      "num_speakers": 1,
+      "speakers": {},
+      "model_size_bytes": 63201294,
+      "installed": true
+    }
+  ],
+  "catalog_available": true,
+  "catalog_error": null
+}
 ```
 
-## Synthesizing Audio
+The remote catalog is cached for one hour. If it is unavailable, downloaded
+voices are still returned with `catalog_available: false`.
 
-Get WAV files via HTTP by posting to `/synthesize`:
+## Analyze text
 
-``` sh
-curl -X POST -H 'Content-Type: application/json' -d '{ "text": "This is a test." }' -o test.wav localhost:5000/synthesize
+`POST /analyze` resolves Auto Detect without synthesizing audio:
+
+```sh
+curl -X POST -H 'Content-Type: application/json' \
+  -d '{"text":"Xin chào, hôm nay thật tuyệt!"}' \
+  localhost:5000/analyze
 ```
 
-The JSON data fields are:
+The response contains:
 
-* `text` (required) - text to synthesize
-* `voice` (optional) - name of voice to use; defaults to `-m <VOICE>`
-* `speaker` (optional) - name of speaker for multi-speaker voices
-* `speaker_id` (optional) - id of speaker for multi-speaker voices; overrides `speaker`
-* `length_scale` (optional) - speaking speed; defaults to 1
-* `noise_scale` (optional) - speaking variability
-* `noise_w_scale` (optional) - phoneme width variability
-
-Get the available voices with:
-
-``` sh
-curl localhost:5000/voices
+```json
+{
+  "language": {
+    "family": "vi",
+    "code": "vi_VN",
+    "name": "Vietnamese",
+    "confidence": 0.96
+  },
+  "context": "conversation",
+  "emotion": "happy",
+  "voice": {"key": "vi_VN-vais1000-medium", "installed": false},
+  "prosody": {
+    "length_scale": 0.95,
+    "noise_scale": 0.72,
+    "noise_w_scale": 0.85
+  },
+  "installed": false,
+  "needs_download": true,
+  "fallback_reason": null
+}
 ```
+
+Possible fallback reasons are `text_too_short`, `low_confidence`, and
+`no_voice_for_language`.
+
+## Download a voice
+
+`POST /download` downloads the model and configuration into `--download-dir`:
+
+```sh
+curl -X POST -H 'Content-Type: application/json' \
+  -d '{"voice":"vi_VN-vais1000-medium"}' \
+  localhost:5000/download
+```
+
+Downloads are explicit and synchronous. Auto Detect never starts a download.
+
+## Synthesize audio
+
+Legacy requests remain supported and use the default `-m` voice:
+
+```sh
+curl -X POST -H 'Content-Type: application/json' \
+  -d '{"text":"This is a test."}' \
+  -o test.wav localhost:5000/synthesize
+```
+
+Auto Detect request:
+
+```json
+{"text":"This is a happy local test!", "mode":"auto"}
+```
+
+Manual Voice request:
+
+```json
+{
+  "text": "This is a manual voice test.",
+  "mode": "manual",
+  "voice": "en_US-lessac-medium",
+  "speaker": "speaker-name"
+}
+```
+
+Supported synthesis fields are:
+
+* `text` (required)
+* `mode`: `auto` or `manual`; omit for legacy behavior
+* `voice`: required by manual mode, optional for legacy behavior
+* `speaker` or `speaker_id`
+* `length_scale`, `noise_scale`, and `noise_w_scale`
+
+Explicit synthesis scale values override Auto Detect prosody. A new-mode request
+for a voice that is not downloaded returns HTTP 409 with
+`error: "voice_not_installed"`. Successful synthesis returns `audio/wav`.
