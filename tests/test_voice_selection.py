@@ -301,3 +301,23 @@ def test_http_catalog_analyze_and_synthesis_modes(http_client: Any) -> None:
     )
     assert missing_response.status_code == 409
     assert missing_response.get_json()["error"] == "voice_not_installed"
+
+
+def test_http_reports_missing_phonemizer_dependency(
+    http_client: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def missing_phonemizer(*_args: Any, **_kwargs: Any) -> Any:
+        raise ModuleNotFoundError(
+            "No module named 'pyopenjtalk'", name="pyopenjtalk"
+        )
+
+    monkeypatch.setattr(_FakeConfig, "phoneme_type", "japanese", raising=False)
+    monkeypatch.setattr(_FakeVoice, "synthesize", missing_phonemizer)
+
+    response = http_client.post("/synthesize", json={"text": "こんにちは"})
+    assert response.status_code == 503
+    assert response.is_json
+    result = response.get_json()
+    assert result["error"] == "phonemizer_dependency_missing"
+    assert "pyopenjtalk" in result["message"]
+    assert "'ja' language extra" in result["message"]

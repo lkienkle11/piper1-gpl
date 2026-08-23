@@ -6,6 +6,15 @@ Install the HTTP server and local language detector dependencies:
 python3 -m pip install 'piper-tts[http]'
 ```
 
+Japanese voices use OpenJTalk and require the Japanese language extra:
+
+```sh
+python3 -m pip install 'piper-tts[http,ja]'
+```
+
+If it is missing, `/synthesize` returns JSON error
+`phonemizer_dependency_missing` with HTTP 503 instead of an HTML error page.
+
 Download a default voice, for example:
 
 ```sh
@@ -31,6 +40,19 @@ voice-selection modes:
   synthesis prosody. Other languages use punctuation rules and neutral emotion.
 * **Manual Voice** selects language, voice name, quality, and speaker. Voices
   from the online catalog must be downloaded explicitly before synthesis.
+
+The custom audio player supports seeking, volume, WAV download, and playback
+speed from `0.10x` to `5.00x`. Its slider advances in `0.05x` steps, while the
+exact-speed input accepts hundredths and remembers the last value in the
+browser. Playback speed is client-side only and does not change synthesis
+prosody or the downloaded WAV. After synthesis, the browser decodes the WAV and
+renders a responsive waveform: played audio is green and remaining audio is
+gray. Clicking, dragging, or using the arrow keys on the waveform seeks audio.
+
+The person button provides a quick picker containing installed voices for the
+current manual or automatically detected language. Choosing a voice updates
+the existing language/name/quality/speaker selectors and switches to Manual
+Voice mode. It never downloads a model automatically.
 
 Auto Detect uses one dominant language for the complete text. It does not split
 mixed-language text into multiple voices. Emotion profiles change synthesis

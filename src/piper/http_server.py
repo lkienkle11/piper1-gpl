@@ -2,6 +2,7 @@
 
 import argparse
 import io
+import itertools
 import json
 import logging
 import time
@@ -31,6 +32,49 @@ def _fetch_voice_catalog() -> Mapping[str, Mapping[str, Any]]:
 
 def _json_error(message: str, code: str, status: int) -> tuple[Response, int]:
     return jsonify({"error": code, "message": message}), status
+
+
+def _synthesize_wav(
+    voice: PiperVoice,
+    text: str,
+    syn_config: SynthesisConfig,
+    sentence_silence: float,
+) -> tuple[bytes, List[str], List[Dict[str, Any]]]:
+    """Synthesize a complete WAV so failures can be returned as JSON."""
+    phonemes: List[str] = []
+    alignments: List[Dict[str, Any]] = []
+    audio_chunks = iter(voice.synthesize(text, syn_config, include_alignments=True))
+    first_chunk = next(audio_chunks, None)
+    if first_chunk is None:
+        raise ValueError("Voice produced no audio")
+
+    with io.BytesIO() as wav_io:
+        wav_file: wave.Wave_write = wave.open(wav_io, "wb")
+        with wav_file:
+            for i, audio_chunk in enumerate(
+                itertools.chain((first_chunk,), audio_chunks)
+            ):
+                if i == 0:
+                    wav_file.setframerate(audio_chunk.sample_rate)
+                    wav_file.setsampwidth(audio_chunk.sample_width)
+                    wav_file.setnchannels(audio_chunk.sample_channels)
+
+                if i > 0:
+                    wav_file.writeframes(
+                        bytes(int(voice.config.sample_rate * sentence_silence * 2))
+                    )
+
+                wav_file.writeframes(audio_chunk.audio_int16_bytes)
+                phonemes.extend(audio_chunk.phonemes)
+                for alignment in audio_chunk.phoneme_alignments or []:
+                    alignments.append(
+                        {
+                            "phoneme": alignment.phoneme,
+                            "seconds": alignment.num_samples / audio_chunk.sample_rate,
+                        }
+                    )
+
+        return wav_io.getvalue(), phonemes, alignments
 
 
 def create_app(
@@ -343,67 +387,62 @@ def create_app(
         )
 
         _LOGGER.debug("Synthesizing text: '%s' with config=%s", text, syn_config)
-        phonemes: List[str] = []
-        alignments: List[Dict[str, Any]] = []
         start_time = time.monotonic()
-        with io.BytesIO() as wav_io:
-            wav_file: wave.Wave_write = wave.open(wav_io, "wb")
-            with wav_file:
-                wav_params_set = False
-                for i, audio_chunk in enumerate(
-                    voice.synthesize(text, syn_config, include_alignments=True)
-                ):
-                    if not wav_params_set:
-                        wav_file.setframerate(audio_chunk.sample_rate)
-                        wav_file.setsampwidth(audio_chunk.sample_width)
-                        wav_file.setnchannels(audio_chunk.sample_channels)
-                        wav_params_set = True
+        try:
+            wav_bytes, phonemes, alignments = _synthesize_wav(
+                voice, text, syn_config, args.sentence_silence
+            )
+        except ImportError as err:
+            phoneme_type = getattr(
+                voice.config.phoneme_type, "value", str(voice.config.phoneme_type)
+            )
+            extra = {"japanese": "ja", "pinyin": "zh"}.get(phoneme_type)
+            install_hint = (
+                f" Install Piper with the '{extra}' language extra."
+                if extra
+                else " Install the optional dependency required by this voice."
+            )
+            missing_package = getattr(err, "name", None) or "unknown"
+            _LOGGER.exception(
+                "Missing phonemizer dependency '%s' for voice %s",
+                missing_package,
+                model_id,
+            )
+            return _json_error(
+                f"Voice '{model_id}' requires missing package "
+                f"'{missing_package}'.{install_hint}",
+                "phonemizer_dependency_missing",
+                503,
+            )
+        except (OSError, RuntimeError, ValueError) as err:
+            _LOGGER.exception("Synthesis failed for voice %s", model_id)
+            return _json_error(str(err), "synthesis_failed", 500)
 
-                    if i > 0:
-                        wav_file.writeframes(
-                            bytes(
-                                int(
-                                    voice.config.sample_rate * args.sentence_silence * 2
-                                )
-                            )
-                        )
+        synthesis_details: Dict[str, Any] = {
+            "text": text,
+            "synthesize_seconds": time.monotonic() - start_time,
+            "phonemes": phonemes,
+            "alignments": alignments,
+            "mode": mode or "legacy",
+            "voice": model_id,
+            "speaker_id": speaker_id,
+            "prosody": {
+                "length_scale": syn_config.length_scale,
+                "noise_scale": syn_config.noise_scale,
+                "noise_w_scale": syn_config.noise_w_scale,
+            },
+        }
+        if analysis:
+            synthesis_details.update(
+                language=analysis["language"],
+                context=analysis["context"],
+                emotion=analysis["emotion"],
+                fallback_reason=analysis["fallback_reason"],
+            )
 
-                    wav_file.writeframes(audio_chunk.audio_int16_bytes)
-                    phonemes.extend(audio_chunk.phonemes)
-                    for alignment in audio_chunk.phoneme_alignments or []:
-                        alignments.append(
-                            {
-                                "phoneme": alignment.phoneme,
-                                "seconds": alignment.num_samples
-                                / audio_chunk.sample_rate,
-                            }
-                        )
-
-            synthesis_details: Dict[str, Any] = {
-                "text": text,
-                "synthesize_seconds": time.monotonic() - start_time,
-                "phonemes": phonemes,
-                "alignments": alignments,
-                "mode": mode or "legacy",
-                "voice": model_id,
-                "speaker_id": speaker_id,
-                "prosody": {
-                    "length_scale": syn_config.length_scale,
-                    "noise_scale": syn_config.noise_scale,
-                    "noise_w_scale": syn_config.noise_w_scale,
-                },
-            }
-            if analysis:
-                synthesis_details.update(
-                    language=analysis["language"],
-                    context=analysis["context"],
-                    emotion=analysis["emotion"],
-                    fallback_reason=analysis["fallback_reason"],
-                )
-
-            last_synthesis.clear()
-            last_synthesis.update(synthesis_details)
-            return Response(wav_io.getvalue(), mimetype="audio/wav")
+        last_synthesis.clear()
+        last_synthesis.update(synthesis_details)
+        return Response(wav_bytes, mimetype="audio/wav")
 
     return app
 
