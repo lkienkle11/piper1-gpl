@@ -257,23 +257,95 @@
     #phonemes span { padding: 3px 6px; border-radius: 5px; background: #eef2f0; font-family: monospace; }
     .muted { color: var(--muted); }
     @media (max-width: 820px) {
+      main { width: min(100% - 24px, 1040px); margin: 20px auto 48px; }
       .grid, .analysis { grid-template-columns: repeat(2, minmax(0, 1fr)); }
       .details { grid-template-columns: 1fr; }
       .actions { align-items: stretch; flex-direction: column; }
-      #buttonSpeak { width: 100%; }
-      .audio-player { width: 100%; }
+      #buttonSpeak { width: 100%; min-height: 52px; }
+      .audio-player {
+        flex: 0 0 auto;
+        width: 100%;
+        min-height: 60px;
+      }
       #volumeSlider { display: none; }
     }
+
+    @media (max-width: 640px) {
+      header { gap: 14px; margin-bottom: 18px; }
+      #logo { width: 84px; }
+      .audio-player {
+        display: grid;
+        grid-template-columns: auto minmax(72px, 1fr) auto auto auto;
+        grid-template-areas:
+          "play time voice volume menu"
+          "seek seek seek seek seek";
+        gap: 7px 8px;
+        padding: 10px 12px;
+        border-radius: 18px;
+      }
+      #playPauseButton { grid-area: play; }
+      .player-time { grid-area: time; min-width: 0; }
+      #seekSlider { grid-area: seek; min-width: 0; }
+      .voice-picker-anchor { grid-area: voice; }
+      .volume-control { grid-area: volume; }
+      .player-menu-anchor { grid-area: menu; }
+      .player-popover {
+        position: fixed;
+        right: 12px;
+        bottom: max(12px, env(safe-area-inset-bottom));
+        left: 12px;
+        width: auto;
+        max-height: min(70vh, 420px);
+        overflow-y: auto;
+      }
+      .player-popover::after { display: none; }
+      .player-menu { width: auto; }
+      .quick-voice-list { max-height: min(52vh, 320px); }
+    }
+
     @media (max-width: 520px) {
-      main { width: min(100% - 20px, 1040px); margin-top: 18px; }
-      .card { padding: 17px; }
+      main { width: calc(100% - 16px); margin: 12px auto 36px; }
+      header { align-items: flex-start; gap: 12px; }
+      #logo { width: 72px; }
+      h1 { font-size: 1.55rem; }
+      header p { margin-top: 4px; font-size: .88rem; line-height: 1.35; }
+      .card { padding: 14px; border-radius: 14px; }
+      .stack { gap: 14px; }
+      textarea { min-height: 120px; padding: 12px; }
       .grid, .analysis { grid-template-columns: 1fr; }
       .mode-switch { width: 100%; }
-      .audio-player { gap: 5px; padding: 8px; }
-      .player-time { min-width: 72px; font-size: .86rem; }
+      .mode-switch label { padding: 8px 6px; font-size: .9rem; }
+      .analysis { gap: 8px; padding: 12px; }
+      select { min-height: 44px; }
+      .voice-status > strong { flex-basis: 100%; overflow-wrap: anywhere; }
+      .actions { gap: 10px; }
+      .audio-player { gap: 6px; padding: 9px 10px; }
+      .player-time { min-width: 0; font-size: .86rem; }
       .player-icon-button { width: 34px; height: 34px; }
       .waveform-panel { min-height: 112px; padding: 8px 10px; }
       #waveformCanvas { height: 94px; }
+      .details { gap: 12px; }
+      th, td { padding: 7px 6px; overflow-wrap: anywhere; }
+      .speed-controls { grid-template-columns: minmax(0, 1fr) 76px; }
+    }
+
+    @media (max-width: 380px) {
+      main { width: calc(100% - 12px); margin-top: 8px; }
+      header { align-items: center; margin-bottom: 12px; }
+      #logo { width: 60px; }
+      h1 { font-size: 1.35rem; }
+      header p { display: none; }
+      .card { padding: 12px; }
+      .mode-switch label { font-size: .82rem; }
+      .audio-player {
+        grid-template-columns: auto minmax(60px, 1fr) auto auto auto;
+        gap: 5px;
+        padding: 8px;
+      }
+      .player-time { font-size: .82rem; }
+      .player-icon-button { width: 32px; height: 32px; }
+      .player-icon-button svg, .player-menu-item svg { width: 20px; height: 20px; }
+      .player-popover { right: 8px; bottom: max(8px, env(safe-area-inset-bottom)); left: 8px; }
     }
   </style>
 </head>
@@ -353,7 +425,7 @@
           </div>
           <input id="seekSlider" class="player-range" type="range" min="0" max="0" step="0.01" value="0" aria-label="Seek audio" disabled>
 
-          <div class="player-popover-anchor">
+          <div class="player-popover-anchor voice-picker-anchor">
             <button id="voicePickerButton" class="player-icon-button" type="button" aria-label="Choose installed voice" aria-haspopup="listbox" aria-expanded="false">
               <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z"/></svg>
             </button>
@@ -371,7 +443,7 @@
             <input id="volumeSlider" class="player-range" type="range" min="0" max="1" step="0.05" value="1" aria-label="Volume">
           </div>
 
-          <div class="player-popover-anchor">
+          <div class="player-popover-anchor player-menu-anchor">
             <button id="playerMenuButton" class="player-icon-button" type="button" aria-label="More audio options" aria-haspopup="menu" aria-expanded="false">
               <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 8c1.1 0 2-.9 2-2s-.9-2-2-2-2 .9-2 2 .9 2 2 2zm0 2c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2zm0 6c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2z"/></svg>
             </button>
