@@ -2,7 +2,6 @@
 
 import argparse
 import io
-import itertools
 import json
 import logging
 import time
@@ -16,6 +15,8 @@ from flask import Flask, Response, jsonify, render_template, request
 from . import PiperVoice, SynthesisConfig
 from .download_voices import VOICES_JSON, download_voice
 from .voice_selection import (
+    EMOTION_VALUES,
+    InvalidScriptError,
     TextAnalyzer,
     catalog_entry_from_config,
     normalize_voice_catalog,
@@ -34,47 +35,82 @@ def _json_error(message: str, code: str, status: int) -> tuple[Response, int]:
     return jsonify({"error": code, "message": message}), status
 
 
-def _synthesize_wav(
+def _invalid_script_error(err: InvalidScriptError) -> tuple[Response, int]:
+    return (
+        jsonify(
+            {
+                "error": "invalid_script",
+                "message": str(err),
+                "line": err.line,
+                "reason": err.reason,
+            }
+        ),
+        400,
+    )
+
+
+def _synthesize_segments_wav(
     voice: PiperVoice,
-    text: str,
-    syn_config: SynthesisConfig,
-    sentence_silence: float,
-) -> tuple[bytes, List[str], List[Dict[str, Any]]]:
+    segments: List[Dict[str, Any]],
+    config_for_segment: Callable[[Mapping[str, Any]], SynthesisConfig],
+) -> tuple[bytes, List[str], List[Dict[str, Any]], List[Dict[str, Any]]]:
     """Synthesize a complete WAV so failures can be returned as JSON."""
     phonemes: List[str] = []
     alignments: List[Dict[str, Any]] = []
-    audio_chunks = iter(voice.synthesize(text, syn_config, include_alignments=True))
-    first_chunk = next(audio_chunks, None)
-    if first_chunk is None:
-        raise ValueError("Voice produced no audio")
+    executed_segments: List[Dict[str, Any]] = []
+    produced_audio = False
 
     with io.BytesIO() as wav_io:
         wav_file: wave.Wave_write = wave.open(wav_io, "wb")
         with wav_file:
-            for i, audio_chunk in enumerate(
-                itertools.chain((first_chunk,), audio_chunks)
-            ):
-                if i == 0:
-                    wav_file.setframerate(audio_chunk.sample_rate)
-                    wav_file.setsampwidth(audio_chunk.sample_width)
-                    wav_file.setnchannels(audio_chunk.sample_channels)
+            wav_file.setframerate(voice.config.sample_rate)
+            wav_file.setsampwidth(2)
+            wav_file.setnchannels(1)
 
-                if i > 0:
+            for segment in segments:
+                if segment["kind"] == "pause":
+                    pause = float(segment["pause"])
                     wav_file.writeframes(
-                        bytes(int(voice.config.sample_rate * sentence_silence * 2))
+                        bytes(round(voice.config.sample_rate * pause) * 2)
+                    )
+                    executed_segments.append(dict(segment))
+                    continue
+
+                syn_config = config_for_segment(segment)
+                segment_details = dict(segment)
+                segment_details["prosody"] = {
+                    "length_scale": syn_config.length_scale,
+                    "noise_scale": syn_config.noise_scale,
+                    "noise_w_scale": syn_config.noise_w_scale,
+                }
+                executed_segments.append(segment_details)
+                for audio_chunk in voice.synthesize(
+                    str(segment["text"]),
+                    syn_config,
+                    include_alignments=True,
+                ):
+                    produced_audio = True
+                    wav_file.writeframes(audio_chunk.audio_int16_bytes)
+                    phonemes.extend(audio_chunk.phonemes)
+                    for alignment in audio_chunk.phoneme_alignments or []:
+                        alignments.append(
+                            {
+                                "phoneme": alignment.phoneme,
+                                "seconds": (
+                                    alignment.num_samples / audio_chunk.sample_rate
+                                ),
+                            }
+                        )
+
+                pause_after = float(segment.get("pause_after", 0.0))
+                if pause_after > 0:
+                    wav_file.writeframes(
+                        bytes(round(voice.config.sample_rate * pause_after) * 2)
                     )
 
-                wav_file.writeframes(audio_chunk.audio_int16_bytes)
-                phonemes.extend(audio_chunk.phonemes)
-                for alignment in audio_chunk.phoneme_alignments or []:
-                    alignments.append(
-                        {
-                            "phoneme": alignment.phoneme,
-                            "seconds": alignment.num_samples / audio_chunk.sample_rate,
-                        }
-                    )
-
-        return wav_io.getvalue(), phonemes, alignments
+        if not produced_audio:
+            raise ValueError("Voice produced no audio")
+        return wav_io.getvalue(), phonemes, alignments, executed_segments
 
 
 def create_app(
@@ -158,9 +194,24 @@ def create_app(
         )
         return voices, bool(raw_catalog), catalog_cache["error"]
 
-    def analyze_text(text: str) -> Dict[str, Any]:
+    def analyze_text(
+        text: str,
+        *,
+        delivery: str = "adaptive",
+        voice_speed: float = 1.0,
+        manual_voice_id: Optional[str] = None,
+        emotion: str = "auto",
+    ) -> Dict[str, Any]:
         voices, catalog_available, catalog_error = get_catalog()
-        result = analyzer.analyze(text, voices, default_model_id)
+        result = analyzer.analyze(
+            text,
+            voices,
+            default_model_id,
+            delivery=delivery,
+            voice_speed=voice_speed,
+            manual_voice_id=manual_voice_id,
+            emotion=emotion,
+        )
         result["catalog_available"] = catalog_available
         result["catalog_error"] = catalog_error
         return result
@@ -227,8 +278,34 @@ def create_app(
         if not text:
             return _json_error("No text provided", "invalid_text", 400)
 
+        mode = data.get("mode", "auto")
+        if mode not in ("auto", "manual"):
+            return _json_error("mode must be auto or manual", "invalid_mode", 400)
+        manual_voice_id: Optional[str] = None
+        if mode == "manual":
+            manual_voice_id = str(data.get("voice", "")).strip()
+            if not manual_voice_id:
+                return _json_error(
+                    "voice is required in manual mode", "invalid_voice", 400
+                )
+
+        emotion = str(data.get("emotion", "auto")).strip().casefold()
+        if emotion not in EMOTION_VALUES:
+            choices = ", ".join(sorted(EMOTION_VALUES))
+            return _json_error(
+                f"emotion must be one of: {choices}", "invalid_emotion", 400
+            )
+
         try:
-            return analyze_text(text)
+            return analyze_text(
+                text,
+                delivery=str(data.get("delivery", "adaptive")),
+                voice_speed=float(data.get("voice_speed", 1.0)),
+                manual_voice_id=manual_voice_id,
+                emotion=emotion,
+            )
+        except InvalidScriptError as err:
+            return _invalid_script_error(err)
         except (TypeError, ValueError) as err:
             return _json_error(str(err), "analysis_failed", 400)
 
@@ -265,10 +342,31 @@ def create_app(
                 raise ValueError("No text provided")
             return _json_error("No text provided", "invalid_text", 400)
 
+        delivery = str(
+            data.get("delivery", "adaptive" if mode in ("auto", "manual") else "fixed")
+        )
+        try:
+            voice_speed = float(data.get("voice_speed", 1.0))
+        except (TypeError, ValueError):
+            return _json_error("voice_speed must be a number", "analysis_failed", 400)
+        emotion = str(data.get("emotion", "auto")).strip().casefold()
+        if emotion not in EMOTION_VALUES:
+            choices = ", ".join(sorted(EMOTION_VALUES))
+            return _json_error(
+                f"emotion must be one of: {choices}", "invalid_emotion", 400
+            )
+
         analysis: Optional[Dict[str, Any]] = None
         if mode == "auto":
             try:
-                analysis = analyze_text(text)
+                analysis = analyze_text(
+                    text,
+                    delivery=delivery,
+                    voice_speed=voice_speed,
+                    emotion=emotion,
+                )
+            except InvalidScriptError as err:
+                return _invalid_script_error(err)
             except (TypeError, ValueError) as err:
                 return _json_error(str(err), "analysis_failed", 400)
 
@@ -300,6 +398,18 @@ def create_app(
                 return _json_error(
                     "voice is required in manual mode", "invalid_voice", 400
                 )
+            try:
+                analysis = analyze_text(
+                    text,
+                    delivery=delivery,
+                    voice_speed=voice_speed,
+                    manual_voice_id=model_id,
+                    emotion=emotion,
+                )
+            except InvalidScriptError as err:
+                return _invalid_script_error(err)
+            except (TypeError, ValueError) as err:
+                return _json_error(str(err), "analysis_failed", 400)
         else:
             model_id = str(data.get("voice", default_model_id))
 
@@ -322,6 +432,20 @@ def create_app(
             model_id = default_model_id
             voice = default_voice
 
+        if analysis is None:
+            try:
+                analysis = analyze_text(
+                    text,
+                    delivery=delivery,
+                    voice_speed=voice_speed,
+                    manual_voice_id=model_id,
+                    emotion=emotion,
+                )
+            except InvalidScriptError as err:
+                return _invalid_script_error(err)
+            except (TypeError, ValueError) as err:
+                return _json_error(str(err), "analysis_failed", 400)
+
         speaker_id: Optional[int] = data.get("speaker_id")
         if (voice.config.num_speakers > 1) and (speaker_id is None):
             speaker = data.get("speaker")
@@ -342,55 +466,66 @@ def create_app(
         ):
             speaker_id = voice.config.default_speaker_id
 
-        auto_prosody = analysis["prosody"] if analysis else {}
-        syn_config = SynthesisConfig(
-            speaker_id=speaker_id,
-            length_scale=float(
-                data.get(
-                    "length_scale",
-                    auto_prosody.get(
-                        "length_scale",
-                        (
-                            args.length_scale
-                            if args.length_scale is not None
-                            else voice.config.length_scale
-                        ),
-                    ),
+        segments = [dict(segment) for segment in analysis["segments"]]
+        text_segment_indexes = [
+            index for index, segment in enumerate(segments) if segment["kind"] == "text"
+        ]
+        if delivery == "fixed":
+            for index in text_segment_indexes[:-1]:
+                segments[index]["pause_after"] = float(args.sentence_silence)
+        elif args.sentence_silence > 0:
+            for index in text_segment_indexes[:-1]:
+                segments[index]["pause_after"] = max(
+                    float(segments[index].get("pause_after", 0.0)),
+                    float(args.sentence_silence),
                 )
-            ),
-            noise_scale=float(
-                data.get(
-                    "noise_scale",
-                    auto_prosody.get(
-                        "noise_scale",
-                        (
-                            args.noise_scale
-                            if args.noise_scale is not None
-                            else voice.config.noise_scale
-                        ),
-                    ),
-                )
-            ),
-            noise_w_scale=float(
-                data.get(
-                    "noise_w_scale",
-                    auto_prosody.get(
-                        "noise_w_scale",
-                        (
-                            args.noise_w_scale
-                            if args.noise_w_scale is not None
-                            else voice.config.noise_w_scale
-                        ),
-                    ),
-                )
-            ),
+
+        base_length_scale = (
+            args.length_scale
+            if args.length_scale is not None
+            else voice.config.length_scale
+        )
+        base_noise_scale = (
+            args.noise_scale
+            if args.noise_scale is not None
+            else voice.config.noise_scale
+        )
+        base_noise_w_scale = (
+            args.noise_w_scale
+            if args.noise_w_scale is not None
+            else voice.config.noise_w_scale
         )
 
-        _LOGGER.debug("Synthesizing text: '%s' with config=%s", text, syn_config)
+        def config_for_segment(segment: Mapping[str, Any]) -> SynthesisConfig:
+            segment_prosody = dict(segment.get("prosody", {}))
+            if delivery == "adaptive" or segment.get("emotion_override"):
+                length_scale = segment_prosody.get("length_scale", base_length_scale)
+                noise_scale = segment_prosody.get("noise_scale", base_noise_scale)
+                noise_w_scale = segment_prosody.get("noise_w_scale", base_noise_w_scale)
+            else:
+                length_scale = base_length_scale / float(
+                    segment.get("voice_speed", voice_speed)
+                )
+                noise_scale = base_noise_scale
+                noise_w_scale = base_noise_w_scale
+
+            return SynthesisConfig(
+                speaker_id=speaker_id,
+                length_scale=float(data.get("length_scale", length_scale)),
+                noise_scale=float(data.get("noise_scale", noise_scale)),
+                noise_w_scale=float(data.get("noise_w_scale", noise_w_scale)),
+            )
+
+        _LOGGER.debug(
+            "Synthesizing text: '%s' with delivery=%s segments=%s",
+            text,
+            delivery,
+            len(segments),
+        )
         start_time = time.monotonic()
         try:
-            wav_bytes, phonemes, alignments = _synthesize_wav(
-                voice, text, syn_config, args.sentence_silence
+            wav_bytes, phonemes, alignments, executed_segments = (
+                _synthesize_segments_wav(voice, segments, config_for_segment)
             )
         except ImportError as err:
             phoneme_type = getattr(
@@ -418,6 +553,10 @@ def create_app(
             _LOGGER.exception("Synthesis failed for voice %s", model_id)
             return _json_error(str(err), "synthesis_failed", 500)
 
+        first_text_segment = next(
+            (segment for segment in executed_segments if segment.get("kind") == "text"),
+            None,
+        )
         synthesis_details: Dict[str, Any] = {
             "text": text,
             "synthesize_seconds": time.monotonic() - start_time,
@@ -426,19 +565,22 @@ def create_app(
             "mode": mode or "legacy",
             "voice": model_id,
             "speaker_id": speaker_id,
-            "prosody": {
-                "length_scale": syn_config.length_scale,
-                "noise_scale": syn_config.noise_scale,
-                "noise_w_scale": syn_config.noise_w_scale,
-            },
+            "delivery": delivery,
+            "voice_speed": voice_speed,
+            "emotion_override": analysis.get("emotion_override"),
+            "prosody": (
+                first_text_segment["prosody"]
+                if first_text_segment is not None
+                else analysis["prosody"]
+            ),
+            "segments": executed_segments,
         }
-        if analysis:
-            synthesis_details.update(
-                language=analysis["language"],
-                context=analysis["context"],
-                emotion=analysis["emotion"],
-                fallback_reason=analysis["fallback_reason"],
-            )
+        synthesis_details.update(
+            language=analysis["language"],
+            context=analysis["context"],
+            emotion=analysis["emotion"],
+            fallback_reason=analysis["fallback_reason"],
+        )
 
         last_synthesis.clear()
         last_synthesis.update(synthesis_details)

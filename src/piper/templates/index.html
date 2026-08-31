@@ -80,10 +80,22 @@
     .field { display: grid; gap: 6px; }
     .field label { color: var(--muted); font-size: 0.82rem; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; }
     select { width: 100%; padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px; background: white; }
+    .field input { width: 100%; padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px; background: white; }
+    .delivery-card { padding: 14px; border: 1px solid var(--line); border-radius: 12px; background: #f8fbfa; }
+    .delivery-header { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+    .delivery-header h2 { margin: 0; font-size: 1rem; }
+    .settings-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+    .settings-actions button { padding: 7px 10px; font-size: .8rem; }
+    .script-help { color: var(--muted); font-size: .84rem; line-height: 1.5; }
+    .script-help code { color: var(--ink); }
+    .segments { display: grid; gap: 6px; }
+    .segment { padding: 8px 10px; border-left: 3px solid var(--brand); border-radius: 6px; background: #f5f8f7; font-size: .82rem; }
+    .segment strong { display: block; margin-bottom: 2px; }
     .analysis {
       display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 10px;
       padding: 16px; border-radius: 14px; background: var(--accent);
     }
+    .analysis.manual-delivery { grid-template-columns: repeat(2, minmax(0, 1fr)); }
     .metric { min-width: 0; }
     .metric span { display: block; color: var(--muted); font-size: .76rem; text-transform: uppercase; letter-spacing: .05em; }
     .metric strong { display: block; margin-top: 2px; overflow-wrap: anywhere; }
@@ -374,12 +386,13 @@
       <section id="autoPanel" class="stack" aria-live="polite">
         <div id="autoEmpty" class="muted">Enter at least three letters to detect language, context and emotion.</div>
         <div id="analysisPanel" class="analysis hidden">
-          <div class="metric"><span>Language</span><strong id="detectedLanguage">—</strong></div>
-          <div class="metric"><span>Confidence</span><strong id="detectedConfidence">—</strong></div>
+          <div class="metric auto-analysis-only"><span>Language</span><strong id="detectedLanguage">—</strong></div>
+          <div class="metric auto-analysis-only"><span>Confidence</span><strong id="detectedConfidence">—</strong></div>
           <div class="metric"><span>Context</span><strong id="detectedContext">—</strong></div>
           <div class="metric"><span>Emotion</span><strong id="detectedEmotion">—</strong></div>
-          <div class="metric"><span>Selected voice</span><strong id="detectedVoice">—</strong></div>
+          <div class="metric auto-analysis-only"><span>Selected voice</span><strong id="detectedVoice">—</strong></div>
         </div>
+        <div id="segmentPreview" class="segments hidden"></div>
         <div id="autoFallback" class="notice hidden"></div>
       </section>
 
@@ -400,6 +413,56 @@
           <label for="speakerSelect">Speaker</label>
           <select id="speakerSelect" disabled></select>
         </div>
+        <div class="field">
+          <label for="manualEmotionSelect">Emotion</label>
+          <select id="manualEmotionSelect">
+            <option value="auto">Auto detect</option>
+            <option value="neutral">Neutral</option>
+            <option value="happy">Happy</option>
+            <option value="sad">Sad</option>
+            <option value="angry">Angry</option>
+            <option value="excited">Excited</option>
+          </select>
+        </div>
+      </section>
+
+      <section class="delivery-card stack" aria-labelledby="deliveryHeading">
+        <div class="delivery-header">
+          <h2 id="deliveryHeading">Delivery</h2>
+          <span class="muted">Used by Auto and Manual Voice</span>
+        </div>
+        <div class="grid">
+          <div class="field">
+            <label for="deliveryModeSelect">Delivery mode</label>
+            <select id="deliveryModeSelect">
+              <option value="adaptive">Adaptive</option>
+              <option value="fixed">Fixed</option>
+            </select>
+          </div>
+          <div class="field">
+            <label for="voiceSpeedPresetSelect">Synthesis speed</label>
+            <select id="voiceSpeedPresetSelect">
+              <option value="slow">Slow · 0.85x</option>
+              <option value="normal">Normal · 1.00x</option>
+              <option value="fast">Fast · 1.15x</option>
+              <option value="custom">Custom</option>
+            </select>
+          </div>
+          <div id="customVoiceSpeedField" class="field hidden">
+            <label for="customVoiceSpeedInput">Custom speed · 0.50–2.00x</label>
+            <input id="customVoiceSpeedInput" type="number" min="0.50" max="2.00" step="0.05" value="1.00">
+          </div>
+        </div>
+        <details class="script-help">
+          <summary>Script controls</summary>
+          <p>Put controls in their own paragraph: <code>(voice-speed: fast)</code>, <code>(emotion: sad)</code>, <code>(pause: 0.5)</code>, or <code>(narration-mode: fragment)</code>. Use <code>(emotion: auto)</code> to resume detection and <code>[[phonemes]]</code> for exact pronunciation.</p>
+        </details>
+        <div class="settings-actions">
+          <button id="resetSettingsButton" type="button" class="secondary">Reset settings</button>
+          <button id="clearScriptButton" type="button" class="secondary">Clear script</button>
+          <button id="resetEverythingButton" type="button" class="secondary">Reset everything</button>
+        </div>
+        <div id="storageWarning" class="notice hidden" role="status"></div>
       </section>
 
       <div id="catalogWarning" class="notice hidden"></div>
@@ -509,31 +572,194 @@
   </main>
 
   <script>
-    const PLAYBACK_RATE_STORAGE_KEY = "piper.playbackRate";
+    const SETTINGS_STORAGE_KEY = "piper.voiceStudio.settings.v1";
+    const DRAFT_STORAGE_KEY = "piper.voiceStudio.draft.v1";
+    const LEGACY_PLAYBACK_RATE_STORAGE_KEY = "piper.playbackRate";
     const MIN_PLAYBACK_RATE = 0.10;
     const MAX_PLAYBACK_RATE = 5.00;
+    const VOICE_SPEED_PRESETS = { slow: 0.85, normal: 1, fast: 1.15 };
+    const DEFAULT_SETTINGS = {
+      version: 1,
+      updatedAt: "",
+      selection: {
+        mode: "auto",
+        manualVoiceKey: "en_GB-cori-high",
+        manualEmotion: "auto",
+        speakerName: null,
+        speakerId: null,
+      },
+      delivery: { mode: "adaptive", voiceSpeedPreset: "normal", voiceSpeed: 1 },
+      player: { volume: 1, muted: false, lastAudibleVolume: 1, playbackRate: 1 },
+    };
 
-    function storedPlaybackRate() {
-      try {
-        const value = Number(localStorage.getItem(PLAYBACK_RATE_STORAGE_KEY));
-        return Number.isFinite(value) && value >= MIN_PLAYBACK_RATE && value <= MAX_PLAYBACK_RATE
-          ? Math.round(value * 100) / 100
-          : 1;
-      } catch (_error) {
-        return 1;
-      }
+    function cloneValue(value) { return JSON.parse(JSON.stringify(value)); }
+    function boundedNumber(value, fallback, minimum, maximum) {
+      const numeric = Number(value);
+      return Number.isFinite(numeric) && numeric >= minimum && numeric <= maximum ? numeric : fallback;
     }
 
+    function sanitizeSettings(value) {
+      const input = value && typeof value === "object" ? value : {};
+      const selection = input.selection && typeof input.selection === "object" ? input.selection : {};
+      const delivery = input.delivery && typeof input.delivery === "object" ? input.delivery : {};
+      const player = input.player && typeof input.player === "object" ? input.player : {};
+      const speedPreset = ["slow", "normal", "fast", "custom"].includes(delivery.voiceSpeedPreset)
+        ? delivery.voiceSpeedPreset : "normal";
+      return {
+        version: 1,
+        updatedAt: typeof input.updatedAt === "string" ? input.updatedAt : "",
+        selection: {
+          mode: ["auto", "manual"].includes(selection.mode) ? selection.mode : "auto",
+          manualVoiceKey: typeof selection.manualVoiceKey === "string" && selection.manualVoiceKey
+            ? selection.manualVoiceKey : "en_GB-cori-high",
+          manualEmotion: ["auto", "neutral", "happy", "sad", "angry", "excited"].includes(selection.manualEmotion)
+            ? selection.manualEmotion : "auto",
+          speakerName: typeof selection.speakerName === "string" ? selection.speakerName : null,
+          speakerId: Number.isInteger(selection.speakerId) && selection.speakerId >= 0 ? selection.speakerId : null,
+        },
+        delivery: {
+          mode: ["adaptive", "fixed"].includes(delivery.mode) ? delivery.mode : "adaptive",
+          voiceSpeedPreset: speedPreset,
+          voiceSpeed: boundedNumber(delivery.voiceSpeed, VOICE_SPEED_PRESETS[speedPreset] || 1, 0.5, 2),
+        },
+        player: {
+          volume: boundedNumber(player.volume, 1, 0, 1),
+          muted: typeof player.muted === "boolean" ? player.muted : false,
+          lastAudibleVolume: boundedNumber(player.lastAudibleVolume, 1, 0.05, 1),
+          playbackRate: boundedNumber(player.playbackRate, 1, MIN_PLAYBACK_RATE, MAX_PLAYBACK_RATE),
+        },
+      };
+    }
+
+    const SettingsStore = (() => {
+      let current = cloneValue(DEFAULT_SETTINGS);
+      let warning = "";
+      const listeners = new Set();
+
+      function setWarning(message) { warning = message; }
+      function notify() { for (const listener of listeners) listener(cloneValue(current)); }
+      function write() {
+        try {
+          current.updatedAt = new Date().toISOString();
+          localStorage.setItem(SETTINGS_STORAGE_KEY, JSON.stringify(current));
+          return true;
+        } catch (_error) {
+          setWarning("Browser storage is unavailable or full. Settings will work for this tab only.");
+          return false;
+        }
+      }
+      function load() {
+        let raw = null;
+        try {
+          raw = localStorage.getItem(SETTINGS_STORAGE_KEY);
+          if (raw) {
+            const parsed = JSON.parse(raw);
+            if (parsed.version !== 1) throw new Error("Unsupported settings version");
+            current = sanitizeSettings(parsed);
+          }
+          const legacyRate = Number(localStorage.getItem(LEGACY_PLAYBACK_RATE_STORAGE_KEY));
+          if (!raw && Number.isFinite(legacyRate) && legacyRate >= MIN_PLAYBACK_RATE && legacyRate <= MAX_PLAYBACK_RATE) {
+            current.player.playbackRate = legacyRate;
+            if (write()) localStorage.removeItem(LEGACY_PLAYBACK_RATE_STORAGE_KEY);
+          } else if (raw && Number.isFinite(legacyRate)) {
+            localStorage.removeItem(LEGACY_PLAYBACK_RATE_STORAGE_KEY);
+          }
+        } catch (_error) {
+          current = cloneValue(DEFAULT_SETTINGS);
+          setWarning("Saved settings were invalid and defaults have been restored.");
+          write();
+        }
+        return cloneValue(current);
+      }
+      function update(mutator) {
+        const next = cloneValue(current);
+        mutator(next);
+        current = sanitizeSettings(next);
+        write();
+        notify();
+        return cloneValue(current);
+      }
+      function replaceExternal(raw) {
+        if (raw === null) {
+          current = cloneValue(DEFAULT_SETTINGS);
+          notify();
+          return cloneValue(current);
+        }
+        try {
+          const parsed = JSON.parse(raw);
+          if (parsed.version !== 1) return;
+          current = sanitizeSettings(parsed);
+          notify();
+          return cloneValue(current);
+        } catch (_error) { /* another tab wrote invalid or partial data */ }
+        return null;
+      }
+      function loadDraft() {
+        try {
+          const parsed = JSON.parse(localStorage.getItem(DRAFT_STORAGE_KEY) || "null");
+          return parsed?.version === 1 && typeof parsed.text === "string" ? parsed.text : "";
+        } catch (_error) {
+          setWarning("The saved narration draft could not be restored.");
+          return "";
+        }
+      }
+      function saveDraft(text) {
+        try {
+          if (!text) {
+            localStorage.removeItem(DRAFT_STORAGE_KEY);
+            return;
+          }
+          localStorage.setItem(DRAFT_STORAGE_KEY, JSON.stringify({ version: 1, text, updatedAt: new Date().toISOString() }));
+        } catch (_error) {
+          setWarning("The narration draft could not be saved because browser storage is unavailable or full.");
+        }
+      }
+      function clearDraft() {
+        try { localStorage.removeItem(DRAFT_STORAGE_KEY); }
+        catch (_error) { setWarning("The saved narration draft could not be cleared."); }
+      }
+      function reset() {
+        current = cloneValue(DEFAULT_SETTINGS);
+        write();
+        notify();
+        return cloneValue(current);
+      }
+      function resetEverything() {
+        try {
+          const keys = [];
+          for (let index = 0; index < localStorage.length; index += 1) {
+            const key = localStorage.key(index);
+            if (key?.startsWith("piper.voiceStudio.")) keys.push(key);
+          }
+          for (const key of keys) localStorage.removeItem(key);
+          localStorage.removeItem(LEGACY_PLAYBACK_RATE_STORAGE_KEY);
+        } catch (_error) { setWarning("Some saved Voice Studio data could not be cleared."); }
+        current = cloneValue(DEFAULT_SETTINGS);
+        notify();
+        return cloneValue(current);
+      }
+      return {
+        load, update, replaceExternal, loadDraft, saveDraft, clearDraft, reset, resetEverything,
+        subscribe(listener) { listeners.add(listener); return () => listeners.delete(listener); },
+        warning() { return warning; },
+      };
+    })();
+
+    const storedSettings = SettingsStore.load();
+    const storedDraft = SettingsStore.loadDraft();
+
     const state = {
-      mode: "auto",
+      mode: storedSettings.selection.mode,
+      settings: storedSettings,
       voices: [],
       analysis: null,
       downloading: false,
       analyzeTimer: null,
       analyzeSequence: 0,
-      playbackRate: storedPlaybackRate(),
+      playbackRate: storedSettings.player.playbackRate,
       currentAudioVoice: "",
-      lastAudibleVolume: 1,
+      lastAudibleVolume: storedSettings.player.lastAudibleVolume,
+      draftTimer: null,
       waveformPeaks: [],
       waveformFrame: null,
       waveformSequence: 0,
@@ -548,6 +774,7 @@
       manualPanel: document.getElementById("manualPanel"),
       autoEmpty: document.getElementById("autoEmpty"),
       analysisPanel: document.getElementById("analysisPanel"),
+      segmentPreview: document.getElementById("segmentPreview"),
       autoFallback: document.getElementById("autoFallback"),
       catalogWarning: document.getElementById("catalogWarning"),
       error: document.getElementById("errorMessage"),
@@ -555,6 +782,15 @@
       name: document.getElementById("nameSelect"),
       quality: document.getElementById("qualitySelect"),
       speaker: document.getElementById("speakerSelect"),
+      manualEmotion: document.getElementById("manualEmotionSelect"),
+      deliveryMode: document.getElementById("deliveryModeSelect"),
+      voiceSpeedPreset: document.getElementById("voiceSpeedPresetSelect"),
+      customVoiceSpeedField: document.getElementById("customVoiceSpeedField"),
+      customVoiceSpeed: document.getElementById("customVoiceSpeedInput"),
+      resetSettings: document.getElementById("resetSettingsButton"),
+      clearScript: document.getElementById("clearScriptButton"),
+      resetEverything: document.getElementById("resetEverythingButton"),
+      storageWarning: document.getElementById("storageWarning"),
       selectedVoice: document.getElementById("selectedVoice"),
       installedBadge: document.getElementById("installedBadge"),
       modelSize: document.getElementById("modelSize"),
@@ -601,6 +837,52 @@
     function showError(message = "") {
       elements.error.textContent = message;
       setHidden(elements.error, !message);
+    }
+    function renderStorageWarning() {
+      const message = SettingsStore.warning();
+      elements.storageWarning.textContent = message;
+      setHidden(elements.storageWarning, !message);
+    }
+    function synthesisVoiceSpeed() {
+      const preset = elements.voiceSpeedPreset.value;
+      if (preset !== "custom") return VOICE_SPEED_PRESETS[preset] || 1;
+      return boundedNumber(elements.customVoiceSpeed.value, state.settings.delivery.voiceSpeed, 0.5, 2);
+    }
+    function persistDeliverySettings() {
+      state.settings = SettingsStore.update((settings) => {
+        settings.delivery.mode = elements.deliveryMode.value;
+        settings.delivery.voiceSpeedPreset = elements.voiceSpeedPreset.value;
+        settings.delivery.voiceSpeed = synthesisVoiceSpeed();
+      });
+      renderStorageWarning();
+    }
+    function persistManualSelection() {
+      const voice = currentManualVoice();
+      if (!voice) return;
+      state.settings = SettingsStore.update((settings) => {
+        settings.selection.manualVoiceKey = voice.key;
+        if (elements.speaker.disabled || !elements.speaker.value) {
+          settings.selection.speakerName = null;
+          settings.selection.speakerId = null;
+        } else if (Object.keys(voice.speakers || {}).length) {
+          settings.selection.speakerName = elements.speaker.value;
+          settings.selection.speakerId = null;
+        } else {
+          settings.selection.speakerName = null;
+          settings.selection.speakerId = Number(elements.speaker.value);
+        }
+      });
+      renderStorageWarning();
+    }
+    function persistManualEmotion() {
+      state.settings = SettingsStore.update((settings) => {
+        settings.selection.manualEmotion = elements.manualEmotion.value;
+      });
+      renderStorageWarning();
+    }
+    function scheduleAnalysis() {
+      clearTimeout(state.analyzeTimer);
+      state.analyzeTimer = setTimeout(analyzeText, 350);
     }
     async function responseErrorMessage(response, fallback) {
       const contentType = response.headers.get("content-type") || "";
@@ -844,8 +1126,19 @@
       elements.speedInput.setAttribute("aria-invalid", "false");
       elements.speedMenuValue.textContent = `${rate.toFixed(2)}x`;
       if (persist) {
-        try { localStorage.setItem(PLAYBACK_RATE_STORAGE_KEY, String(rate)); } catch (_error) { /* storage is optional */ }
+        state.settings = SettingsStore.update((settings) => { settings.player.playbackRate = rate; });
+        renderStorageWarning();
       }
+    }
+
+    function persistPlayerSettings() {
+      state.settings = SettingsStore.update((settings) => {
+        settings.player.volume = elements.audio.volume;
+        settings.player.muted = elements.audio.muted;
+        settings.player.lastAudibleVolume = state.lastAudibleVolume;
+        settings.player.playbackRate = state.playbackRate;
+      });
+      renderStorageWarning();
     }
 
     function sanitizePlaybackRateText(value) {
@@ -915,6 +1208,7 @@
       elements.modeManual.checked = true;
       elements.modeAuto.checked = false;
       switchMode("manual");
+      persistManualSelection();
       closePlayerPopovers();
       elements.voicePicker.focus();
     }
@@ -989,16 +1283,23 @@
       const oldSpeaker = elements.speaker.value;
       const languages = unique(state.voices.map((voice) => voice.language.code)).sort();
       const installed = state.voices.find((voice) => voice.installed);
+      const storedVoice = state.voices.find((voice) => voice.key === state.settings.selection.manualVoiceKey);
       const selected = languages.includes(oldLanguage)
         ? oldLanguage
-        : (installed?.language.code || languages[0]);
+        : (storedVoice?.language.code || installed?.language.code || languages[0]);
       fillSelect(elements.language, languages, selected, (code) => {
         const voice = state.voices.find((item) => item.language.code === code);
         const language = voice?.language || {};
         const name = language.name_native || language.name_english || code;
         return `${name} — ${code}${language.country_english ? ` (${language.country_english})` : ""}`;
       });
-      updateManualNames(oldName, oldQuality, oldSpeaker);
+      const preferredSpeaker = oldSpeaker || state.settings.selection.speakerName
+        || (state.settings.selection.speakerId === null ? "" : String(state.settings.selection.speakerId));
+      updateManualNames(
+        oldName || storedVoice?.name,
+        oldQuality || storedVoice?.quality,
+        preferredSpeaker,
+      );
     }
 
     function selectedVoiceForMode() {
@@ -1032,12 +1333,38 @@
       elements.speak.disabled = state.downloading || !elements.text.value.trim() || !voice?.installed;
     }
 
+    function analysisEnabledForMode() {
+      return state.mode === "auto" || elements.deliveryMode.value === "adaptive";
+    }
+
+    function updateAnalysisPresentation() {
+      const manualAdaptive = state.mode === "manual" && elements.deliveryMode.value === "adaptive";
+      setHidden(elements.autoPanel, !analysisEnabledForMode());
+      elements.analysisPanel.classList.toggle("manual-delivery", manualAdaptive);
+      for (const metric of elements.analysisPanel.querySelectorAll(".auto-analysis-only")) {
+        setHidden(metric, manualAdaptive);
+      }
+      elements.autoEmpty.textContent = manualAdaptive
+        ? "Enter text to analyze context, emotion and segment delivery."
+        : "Enter at least three letters to detect language, context and emotion.";
+    }
+
     function renderAnalysis() {
+      updateAnalysisPresentation();
+      if (!analysisEnabledForMode()) {
+        setHidden(elements.analysisPanel, true);
+        setHidden(elements.segmentPreview, true);
+        setHidden(elements.autoFallback, true);
+        renderVoiceStatus();
+        return;
+      }
       const result = state.analysis;
       setHidden(elements.autoEmpty, Boolean(result));
       setHidden(elements.analysisPanel, !result);
       if (!result) {
         setHidden(elements.autoFallback, true);
+        elements.segmentPreview.replaceChildren();
+        setHidden(elements.segmentPreview, true);
         renderVoiceStatus();
         return;
       }
@@ -1056,7 +1383,25 @@
         no_voice_for_language: "No Piper voice exists for the detected language.",
       };
       elements.autoFallback.textContent = reasons[result.fallback_reason] || "";
-      setHidden(elements.autoFallback, !result.fallback_reason);
+      setHidden(elements.autoFallback, state.mode === "manual" || !result.fallback_reason);
+      elements.segmentPreview.replaceChildren();
+      for (const segment of result.segments || []) {
+        const item = document.createElement("div");
+        item.className = "segment";
+        if (segment.kind === "pause") {
+          const title = document.createElement("strong");
+          title.textContent = `Explicit pause · ${segment.pause}s`;
+          item.append(title);
+        } else {
+          const title = document.createElement("strong");
+          title.textContent = `${titleCase(segment.context)} / ${titleCase(segment.emotion)} · ${segment.voice_speed.toFixed(2)}x · pause ${segment.pause_after}s`;
+          const content = document.createElement("span");
+          content.textContent = segment.text;
+          item.append(title, content);
+        }
+        elements.segmentPreview.append(item);
+      }
+      setHidden(elements.segmentPreview, !(result.segments || []).length);
       renderVoiceStatus();
     }
 
@@ -1074,7 +1419,7 @@
         } else {
           setHidden(elements.catalogWarning, true);
         }
-        if (state.mode === "auto" && elements.text.value.trim()) await analyzeText();
+        if (elements.text.value.trim()) await analyzeText();
         renderVoiceStatus();
       } catch (error) {
         showError(error.message);
@@ -1087,7 +1432,18 @@
     async function analyzeText() {
       const text = elements.text.value.trim();
       const sequence = ++state.analyzeSequence;
+      if (!analysisEnabledForMode()) {
+        state.analysis = null;
+        renderAnalysis();
+        return;
+      }
       if (!text) {
+        state.analysis = null;
+        renderAnalysis();
+        return;
+      }
+      const voice = currentManualVoice();
+      if (state.mode === "manual" && !voice) {
         state.analysis = null;
         renderAnalysis();
         return;
@@ -1096,7 +1452,14 @@
         const response = await fetch("analyze", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ text }),
+          body: JSON.stringify({
+            text,
+            mode: state.mode,
+            voice: state.mode === "manual" ? voice.key : undefined,
+            emotion: state.mode === "manual" ? elements.manualEmotion.value : undefined,
+            delivery: elements.deliveryMode.value,
+            voice_speed: synthesisVoiceSpeed(),
+          }),
         });
         if (!response.ok) {
           throw new Error(await responseErrorMessage(response, `Analysis failed: ${response.status}`));
@@ -1176,9 +1539,15 @@
       const voice = selectedVoiceForMode();
       if (!text || !voice?.installed) return;
 
-      const payload = { text, mode: state.mode };
+      const payload = {
+        text,
+        mode: state.mode,
+        delivery: elements.deliveryMode.value,
+        voice_speed: synthesisVoiceSpeed(),
+      };
       if (state.mode === "manual") {
         payload.voice = voice.key;
+        payload.emotion = elements.manualEmotion.value;
         if (!elements.speaker.disabled && elements.speaker.value) {
           if (Object.keys(voice.speakers || {}).length) payload.speaker = elements.speaker.value;
           else payload.speaker_id = Number(elements.speaker.value);
@@ -1219,26 +1588,96 @@
       }
     }
 
-    function switchMode(mode) {
+    function switchMode(mode, persist = true) {
       state.mode = mode;
-      setHidden(elements.autoPanel, mode !== "auto");
       setHidden(elements.manualPanel, mode !== "manual");
+      updateAnalysisPresentation();
       showError();
-      if (mode === "auto" && elements.text.value.trim()) analyzeText();
+      if (persist) {
+        state.settings = SettingsStore.update((settings) => { settings.selection.mode = mode; });
+        renderStorageWarning();
+      }
+      if (elements.text.value.trim()) analyzeText();
       else renderVoiceStatus();
+    }
+
+    function applyStoredSettings(settings) {
+      state.settings = settings;
+      state.lastAudibleVolume = settings.player.lastAudibleVolume;
+      elements.deliveryMode.value = settings.delivery.mode;
+      elements.manualEmotion.value = settings.selection.manualEmotion;
+      elements.voiceSpeedPreset.value = settings.delivery.voiceSpeedPreset;
+      elements.customVoiceSpeed.value = settings.delivery.voiceSpeed.toFixed(2);
+      setHidden(elements.customVoiceSpeedField, settings.delivery.voiceSpeedPreset !== "custom");
+      elements.audio.volume = settings.player.volume;
+      elements.audio.muted = settings.player.muted;
+      setPlaybackRate(settings.player.playbackRate, false);
+      elements.modeAuto.checked = settings.selection.mode === "auto";
+      elements.modeManual.checked = settings.selection.mode === "manual";
+      if (state.voices.length) {
+        elements.language.value = "";
+        elements.name.value = "";
+        elements.quality.value = "";
+        elements.speaker.value = "";
+        populateManualSelectors();
+      }
+      switchMode(settings.selection.mode, false);
+      syncVolumeState();
+      renderStorageWarning();
     }
 
     elements.modeAuto.addEventListener("change", () => switchMode("auto"));
     elements.modeManual.addEventListener("change", () => switchMode("manual"));
     elements.text.addEventListener("input", () => {
-      clearTimeout(state.analyzeTimer);
-      if (state.mode === "auto") state.analyzeTimer = setTimeout(analyzeText, 350);
+      scheduleAnalysis();
+      clearTimeout(state.draftTimer);
+      state.draftTimer = setTimeout(() => {
+        SettingsStore.saveDraft(elements.text.value);
+        renderStorageWarning();
+      }, 300);
       updateSpeakState();
     });
-    elements.language.addEventListener("change", () => updateManualNames());
-    elements.name.addEventListener("change", () => updateManualQualities());
-    elements.quality.addEventListener("change", () => updateManualSpeakers());
-    elements.speaker.addEventListener("change", renderVoiceStatus);
+    elements.language.addEventListener("change", () => { updateManualNames(); persistManualSelection(); scheduleAnalysis(); });
+    elements.name.addEventListener("change", () => { updateManualQualities(); persistManualSelection(); scheduleAnalysis(); });
+    elements.quality.addEventListener("change", () => { updateManualSpeakers(); persistManualSelection(); scheduleAnalysis(); });
+    elements.speaker.addEventListener("change", () => { persistManualSelection(); renderVoiceStatus(); scheduleAnalysis(); });
+    elements.manualEmotion.addEventListener("change", () => { persistManualEmotion(); scheduleAnalysis(); });
+    elements.deliveryMode.addEventListener("change", () => {
+      persistDeliverySettings();
+      updateAnalysisPresentation();
+      scheduleAnalysis();
+    });
+    elements.voiceSpeedPreset.addEventListener("change", () => {
+      const preset = elements.voiceSpeedPreset.value;
+      if (preset !== "custom") elements.customVoiceSpeed.value = (VOICE_SPEED_PRESETS[preset] || 1).toFixed(2);
+      setHidden(elements.customVoiceSpeedField, preset !== "custom");
+      persistDeliverySettings();
+      scheduleAnalysis();
+    });
+    elements.customVoiceSpeed.addEventListener("change", () => {
+      elements.customVoiceSpeed.value = synthesisVoiceSpeed().toFixed(2);
+      persistDeliverySettings();
+      scheduleAnalysis();
+    });
+    elements.resetSettings.addEventListener("click", () => applyStoredSettings(SettingsStore.reset()));
+    elements.clearScript.addEventListener("click", () => {
+      clearTimeout(state.draftTimer);
+      elements.text.value = "";
+      SettingsStore.clearDraft();
+      state.analysis = null;
+      renderAnalysis();
+      updateSpeakState();
+      renderStorageWarning();
+    });
+    elements.resetEverything.addEventListener("click", () => {
+      if (!window.confirm("Reset every Voice Studio setting and delete the saved script?")) return;
+      clearTimeout(state.draftTimer);
+      elements.text.value = "";
+      applyStoredSettings(SettingsStore.resetEverything());
+      state.analysis = null;
+      renderAnalysis();
+      updateSpeakState();
+    });
     elements.download.addEventListener("click", downloadSelectedVoice);
     elements.speak.addEventListener("click", speak);
 
@@ -1269,6 +1708,7 @@
         elements.audio.muted = true;
       }
       syncVolumeState();
+      persistPlayerSettings();
     });
     elements.volume.addEventListener("input", () => {
       const volume = Number(elements.volume.value);
@@ -1276,6 +1716,7 @@
       elements.audio.muted = false;
       if (volume > 0) state.lastAudibleVolume = volume;
       syncVolumeState();
+      persistPlayerSettings();
     });
     elements.voicePicker.addEventListener("click", () => {
       renderQuickVoices();
@@ -1365,14 +1806,27 @@
       if (event.key === "Escape") closePlayerPopovers();
     });
     window.addEventListener("beforeunload", () => {
+      clearTimeout(state.draftTimer);
+      SettingsStore.saveDraft(elements.text.value);
       if (state.waveformFrame !== null) cancelAnimationFrame(state.waveformFrame);
       if (elements.audio.dataset.objectUrl) URL.revokeObjectURL(elements.audio.dataset.objectUrl);
     });
+    window.addEventListener("storage", (event) => {
+      if (event.key === SETTINGS_STORAGE_KEY) {
+        const settings = SettingsStore.replaceExternal(event.newValue);
+        if (settings) applyStoredSettings(settings);
+      } else if (event.key === DRAFT_STORAGE_KEY) {
+        elements.text.value = SettingsStore.loadDraft();
+        scheduleAnalysis();
+        updateSpeakState();
+      }
+    });
 
-    setPlaybackRate(state.playbackRate, false);
+    SettingsStore.subscribe((settings) => { state.settings = settings; });
+    elements.text.value = storedDraft;
+    applyStoredSettings(storedSettings);
     syncAudioPosition();
     syncPlayState();
-    syncVolumeState();
     loadCatalog();
     loadInfo();
   </script>

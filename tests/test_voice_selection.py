@@ -7,9 +7,11 @@ import pytest
 
 from piper.http_server import create_app
 from piper.voice_selection import (
+    InvalidScriptError,
     TextAnalyzer,
     classify_text,
     normalize_voice_catalog,
+    parse_script,
     prosody_for,
     resolve_voice,
 )
@@ -122,6 +124,48 @@ def test_normalize_and_resolve_voice_priority() -> None:
     assert selected["key"] == "en_GB-alan-low"
 
 
+def test_resolver_prefers_configured_british_voice_before_installed_us() -> None:
+    voices = [
+        _catalog_voice("en_US-lessac-medium", "en", "en_US", "lessac", "medium", True),
+        _catalog_voice("en_GB-alan-medium", "en", "en_GB", "alan", "medium", True),
+        _catalog_voice("en_GB-cori-high", "en", "en_GB", "cori", "high", False),
+    ]
+    selected = resolve_voice("en", voices, "en_US-lessac-medium")
+    assert selected is not None
+    assert selected["key"] == "en_GB-cori-high"
+    assert selected["installed"] is False
+
+
+def test_parse_script_directions_and_validation() -> None:
+    segments = parse_script(
+        "(voice-speed: fast)\n\nFirst sentence. Second sentence?\n\n"
+        "(pause: 0.5)\n\n(narration-mode: fragment)\n\n"
+        "[[wˈɒʃɪŋ ɐ kʌpɪnðə sˈɪŋk]]"
+    )
+    assert [segment.kind for segment in segments] == ["text", "text", "pause", "text"]
+    assert segments[0].voice_speed == 1.15
+    assert segments[1].paragraph_end
+    assert segments[2].pause == 0.5
+    assert segments[3].narration_mode == "fragment"
+    assert "kʌpɪn" in segments[3].text
+
+    with pytest.raises(InvalidScriptError, match="Line 1"):
+        parse_script("(voice-speed: 3)")
+    with pytest.raises(InvalidScriptError, match="unknown stage direction"):
+        parse_script("(pitch: high)\n\nHello")
+
+
+def test_parse_script_emotion_direction_is_stateful() -> None:
+    segments = parse_script(
+        "(emotion: sad)\n\nThis is the first paragraph.\n\n"
+        "(emotion: auto)\n\nThis is the second paragraph."
+    )
+    assert [segment.emotion for segment in segments] == ["sad", "auto"]
+
+    with pytest.raises(InvalidScriptError, match=r"Line 3: emotion must be"):
+        parse_script("Hello.\n\n(emotion: dramatic)")
+
+
 class _FakeIsoCode:
     def __init__(self, name: str) -> None:
         self.name = name
@@ -154,10 +198,65 @@ def test_analyzer_uses_dominant_language_and_short_text_fallback() -> None:
     assert result["language"]["family"] == "vi"
     assert result["voice"]["key"] == "vi_VN-vivos-x_low"
     assert result["emotion"] == "happy"
+    assert result["segments"][0]["kind"] == "text"
+    assert result["segments"][0]["pause_after"] == 0.0
 
     short_result = analyzer.analyze("Hi", voices, "en_US-lessac-medium")
     assert short_result["language"]["family"] == "en"
     assert short_result["fallback_reason"] == "text_too_short"
+
+
+def test_analyzer_applies_adaptive_segments_and_manual_voice() -> None:
+    voices = [
+        _catalog_voice("en_US-lessac-medium", "en", "en_US", "lessac", "medium", True),
+        _catalog_voice("en_GB-cori-high", "en", "en_GB", "cori", "high", True),
+    ]
+    analyzer = TextAnalyzer()
+    result = analyzer.analyze(
+        "Hello there.\n\nWhy now?",
+        voices,
+        "en_US-lessac-medium",
+        manual_voice_id="en_GB-cori-high",
+        delivery="adaptive",
+        voice_speed=1.15,
+    )
+    text_segments = [item for item in result["segments"] if item["kind"] == "text"]
+    assert result["voice"]["key"] == "en_GB-cori-high"
+    assert text_segments[0]["pause_after"] == 0.3
+    assert text_segments[1]["context"] == "question"
+    assert text_segments[0]["prosody"]["length_scale"] < 1.0
+
+
+@pytest.mark.parametrize("delivery", ["adaptive", "fixed"])
+def test_analyzer_applies_manual_emotion_override(delivery: str) -> None:
+    voices = [_catalog_voice("en_GB-cori-high", "en", "en_GB", "cori", "high", True)]
+    result = TextAnalyzer().analyze(
+        "A quiet factual sentence.",
+        voices,
+        "en_GB-cori-high",
+        manual_voice_id="en_GB-cori-high",
+        delivery=delivery,
+        emotion="sad",
+    )
+    segment = result["segments"][0]
+    assert result["emotion"] == "sad"
+    assert result["emotion_override"] == "sad"
+    assert segment["emotion"] == "sad"
+    assert segment["emotion_override"] == "sad"
+    assert segment["prosody"]["length_scale"] > 1.0
+
+
+def test_script_emotion_overrides_manual_default() -> None:
+    voices = [_catalog_voice("en_GB-cori-high", "en", "en_GB", "cori", "high", True)]
+    result = TextAnalyzer().analyze(
+        "(emotion: angry)\n\nA quiet factual sentence.",
+        voices,
+        "en_GB-cori-high",
+        manual_voice_id="en_GB-cori-high",
+        emotion="happy",
+    )
+    assert result["segments"][0]["emotion"] == "angry"
+    assert result["segments"][0]["emotion_override"] == "angry"
 
 
 class _FakeConfig:
@@ -246,17 +345,47 @@ def http_client(tmp_path: Any, monkeypatch: pytest.MonkeyPatch) -> Any:
         },
         "context": "conversation",
         "emotion": "neutral",
+        "emotion_override": None,
         "voice": _catalog_voice(
             "en_US-lessac-medium", "en", "en_US", "lessac", "medium", True
         ),
         "prosody": prosody_for("neutral", "conversation"),
+        "delivery": "adaptive",
+        "voice_speed": 1.0,
+        "segments": [
+            {
+                "kind": "text",
+                "line": 1,
+                "text": "Hello",
+                "context": "fragment",
+                "emotion": "neutral",
+                "emotion_override": None,
+                "voice_speed": 1.0,
+                "narration_mode": "normal",
+                "paragraph_end": True,
+                "prosody": prosody_for("neutral", "conversation"),
+                "pause_after": 0.0,
+            }
+        ],
         "installed": True,
         "needs_download": False,
         "fallback_reason": None,
     }
-    monkeypatch.setattr(
-        TextAnalyzer, "analyze", lambda *_args, **_kwargs: fake_analysis
-    )
+
+    def fake_analyze(_self: Any, text: str, *_args: Any, **kwargs: Any) -> Any:
+        parse_script(text, float(kwargs.get("voice_speed", 1.0)))
+        emotion = kwargs.get("emotion", "auto")
+        result = {**fake_analysis, "segments": [dict(fake_analysis["segments"][0])]}
+        if emotion != "auto":
+            result["emotion"] = emotion
+            result["emotion_override"] = emotion
+            result["prosody"] = prosody_for(emotion, "conversation")
+            result["segments"][0]["emotion"] = emotion
+            result["segments"][0]["emotion_override"] = emotion
+            result["segments"][0]["prosody"] = prosody_for(emotion, "conversation")
+        return result
+
+    monkeypatch.setattr(TextAnalyzer, "analyze", fake_analyze)
     app = create_app(
         args,
         model_path,
@@ -303,13 +432,52 @@ def test_http_catalog_analyze_and_synthesis_modes(http_client: Any) -> None:
     assert missing_response.get_json()["error"] == "voice_not_installed"
 
 
+def test_http_manual_emotion_and_validation(
+    http_client: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    synthesis_configs = []
+
+    def capture_synthesis(
+        _self: Any, _text: str, syn_config: Any, **_kwargs: Any
+    ) -> Iterable[_FakeChunk]:
+        synthesis_configs.append(syn_config)
+        yield _FakeChunk()
+
+    monkeypatch.setattr(_FakeVoice, "synthesize", capture_synthesis)
+    response = http_client.post(
+        "/synthesize",
+        json={
+            "text": "A quiet factual sentence.",
+            "mode": "manual",
+            "voice": "en_US-lessac-medium",
+            "delivery": "fixed",
+            "emotion": "sad",
+        },
+    )
+    assert response.status_code == 200
+    assert synthesis_configs[0].length_scale == 1.15
+    last = http_client.get("/info").get_json()["last"]
+    assert last["emotion"] == "sad"
+    assert last["emotion_override"] == "sad"
+
+    invalid = http_client.post(
+        "/analyze",
+        json={
+            "text": "Hello",
+            "mode": "manual",
+            "voice": "en_US-lessac-medium",
+            "emotion": "dramatic",
+        },
+    )
+    assert invalid.status_code == 400
+    assert invalid.get_json()["error"] == "invalid_emotion"
+
+
 def test_http_reports_missing_phonemizer_dependency(
     http_client: Any, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     def missing_phonemizer(*_args: Any, **_kwargs: Any) -> Any:
-        raise ModuleNotFoundError(
-            "No module named 'pyopenjtalk'", name="pyopenjtalk"
-        )
+        raise ModuleNotFoundError("No module named 'pyopenjtalk'", name="pyopenjtalk")
 
     monkeypatch.setattr(_FakeConfig, "phoneme_type", "japanese", raising=False)
     monkeypatch.setattr(_FakeVoice, "synthesize", missing_phonemizer)
@@ -321,3 +489,17 @@ def test_http_reports_missing_phonemizer_dependency(
     assert result["error"] == "phonemizer_dependency_missing"
     assert "pyopenjtalk" in result["message"]
     assert "'ja' language extra" in result["message"]
+
+
+def test_http_reports_invalid_script_with_line_number(http_client: Any) -> None:
+    response = http_client.post(
+        "/synthesize",
+        json={
+            "text": "Hello.\n\n(voice-speed: 3)",
+            "mode": "auto",
+        },
+    )
+    assert response.status_code == 400
+    result = response.get_json()
+    assert result["error"] == "invalid_script"
+    assert result["line"] == 3

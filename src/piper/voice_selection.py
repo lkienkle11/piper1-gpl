@@ -55,12 +55,23 @@ DETECTOR_LANGUAGE_ALIASES_REVERSE = {
     detector: piper for piper, detector in DETECTOR_LANGUAGE_ALIASES.items()
 }
 AUTO_LOCALE_DEFAULTS = {
-    "en": "en_US",
+    "en": "en_GB",
     "es": "es_ES",
     "nl": "nl_NL",
     "pt": "pt_BR",
     "vi": "vi_VN",
 }
+AUTO_VOICE_DEFAULTS = {"en": "en_GB-cori-high"}
+
+VOICE_SPEED_PRESETS = {"slow": 0.85, "normal": 1.0, "fast": 1.15}
+CONTEXT_PAUSES = {
+    "fragment": 0.0,
+    "conversation": 0.08,
+    "narration": 0.14,
+    "announcement": 0.12,
+    "question": 0.22,
+}
+PARAGRAPH_PAUSE = 0.30
 
 EMOTION_PROFILES: Mapping[str, Mapping[str, float]] = {
     "neutral": {
@@ -89,13 +100,38 @@ EMOTION_PROFILES: Mapping[str, Mapping[str, float]] = {
         "noise_w_scale": 0.95,
     },
 }
+EMOTION_VALUES = frozenset({"auto", *EMOTION_PROFILES})
 
 CONTEXT_LENGTH_MULTIPLIERS = {
+    "fragment": 0.95,
     "conversation": 1.0,
     "narration": 1.05,
     "question": 0.98,
     "announcement": 0.92,
 }
+
+
+class InvalidScriptError(ValueError):
+    """Raised when a narration stage direction is invalid."""
+
+    def __init__(self, line: int, message: str) -> None:
+        super().__init__(f"Line {line}: {message}")
+        self.line = line
+        self.reason = message
+
+
+@dataclass(frozen=True)
+class ScriptSegment:
+    """A parsed narration text or explicit pause segment."""
+
+    kind: str
+    line: int
+    text: str = ""
+    voice_speed: float = 1.0
+    emotion: str = "auto"
+    narration_mode: str = "normal"
+    paragraph_end: bool = False
+    pause: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -278,6 +314,196 @@ def _matches(text: str, tokens: Set[str], terms: Iterable[str]) -> bool:
     return any((term in lowered) if " " in term else (term in tokens) for term in terms)
 
 
+_DIRECTIVE_RE = re.compile(r"^\(\s*([a-z-]+)\s*:\s*([^)]*?)\s*\)$", re.I)
+_CLOSING_PUNCTUATION = set("\"'”’)]}")
+_NON_TERMINAL_ABBREVIATIONS = {
+    "dr",
+    "e.g",
+    "etc",
+    "i.e",
+    "jr",
+    "mr",
+    "mrs",
+    "ms",
+    "prof",
+    "sr",
+    "st",
+    "vs",
+}
+
+
+def _split_sentences(text: str) -> List[str]:
+    """Split paragraph text at terminal punctuation, preserving raw IPA blocks."""
+    sentences: List[str] = []
+    start = 0
+    index = 0
+    in_phonemes = False
+    while index < len(text):
+        if text.startswith("[[", index):
+            in_phonemes = True
+            index += 2
+            continue
+        if in_phonemes and text.startswith("]]", index):
+            in_phonemes = False
+            index += 2
+            continue
+
+        char = text[index]
+        if in_phonemes or char not in ".!?…":
+            index += 1
+            continue
+
+        boundary = True
+        if char == ".":
+            before = text[start:index].rstrip()
+            token_match = re.search(r"([A-Za-z](?:[A-Za-z.]*)?)$", before)
+            token = token_match.group(1).casefold().rstrip(".") if token_match else ""
+            next_nonspace = re.search(r"\S", text[index + 1 :])
+            next_char = text[index + 1 + next_nonspace.start()] if next_nonspace else ""
+            if (
+                token in _NON_TERMINAL_ABBREVIATIONS
+                or (len(token) == 1 and token.isalpha())
+                or (next_char and next_char.islower())
+            ):
+                boundary = False
+
+        if not boundary:
+            index += 1
+            continue
+
+        end = index + 1
+        while end < len(text) and text[end] in ".!?…":
+            end += 1
+        while end < len(text) and text[end] in _CLOSING_PUNCTUATION:
+            end += 1
+        if end < len(text) and not text[end].isspace():
+            index = end
+            continue
+
+        sentence = text[start:end].strip()
+        if sentence:
+            sentences.append(sentence)
+        start = end
+        index = end
+
+    remainder = text[start:].strip()
+    if remainder:
+        sentences.append(remainder)
+    return sentences
+
+
+def _parse_voice_speed(value: str, line: int) -> float:
+    preset = VOICE_SPEED_PRESETS.get(value.casefold())
+    if preset is not None:
+        return preset
+    try:
+        speed = float(value)
+    except ValueError as err:
+        raise InvalidScriptError(
+            line, "voice-speed must be slow, normal, fast, or a number"
+        ) from err
+    if not 0.5 <= speed <= 2.0:
+        raise InvalidScriptError(line, "voice-speed must be between 0.5 and 2.0")
+    return speed
+
+
+def _parse_emotion(value: str, line: int) -> str:
+    emotion = value.casefold()
+    if emotion not in EMOTION_VALUES:
+        choices = ", ".join(sorted(EMOTION_VALUES))
+        raise InvalidScriptError(line, f"emotion must be one of: {choices}")
+    return emotion
+
+
+def parse_script(
+    text: str,
+    base_voice_speed: float = 1.0,
+    base_emotion: str = "auto",
+) -> List[ScriptSegment]:
+    """Parse narration paragraphs and Narakeet-style stage directions."""
+    if not 0.5 <= base_voice_speed <= 2.0:
+        raise InvalidScriptError(1, "voice_speed must be between 0.5 and 2.0")
+    base_emotion = _parse_emotion(base_emotion.strip(), 1)
+
+    blocks: List[Tuple[int, str]] = []
+    block_lines: List[str] = []
+    block_start = 1
+    for line_number, raw_line in enumerate(text.splitlines(), start=1):
+        if raw_line.strip():
+            if not block_lines:
+                block_start = line_number
+            block_lines.append(raw_line.strip())
+        elif block_lines:
+            blocks.append((block_start, " ".join(block_lines)))
+            block_lines = []
+    if block_lines:
+        blocks.append((block_start, " ".join(block_lines)))
+
+    voice_speed = base_voice_speed
+    emotion = base_emotion
+    narration_mode = "normal"
+    segments: List[ScriptSegment] = []
+    for block_line, block in blocks:
+        directive = _DIRECTIVE_RE.fullmatch(block)
+        if directive:
+            name = directive.group(1).casefold()
+            value = directive.group(2).strip()
+            if name == "voice-speed":
+                voice_speed = _parse_voice_speed(value, block_line)
+            elif name == "emotion":
+                emotion = _parse_emotion(value, block_line)
+            elif name == "pause":
+                try:
+                    pause = float(value)
+                except ValueError as err:
+                    raise InvalidScriptError(
+                        block_line, "pause must be a number of seconds"
+                    ) from err
+                if not 0.0 <= pause <= 10.0:
+                    raise InvalidScriptError(
+                        block_line, "pause must be between 0 and 10 seconds"
+                    )
+                segments.append(
+                    ScriptSegment(kind="pause", line=block_line, pause=pause)
+                )
+            elif name == "narration-mode":
+                value = value.casefold()
+                if value not in ("normal", "fragment"):
+                    raise InvalidScriptError(
+                        block_line, "narration-mode must be normal or fragment"
+                    )
+                narration_mode = value
+            else:
+                raise InvalidScriptError(
+                    block_line, f"unknown stage direction '{name}'"
+                )
+            continue
+
+        if re.match(r"^\s*\([a-z-]+\s*:", block, flags=re.I):
+            raise InvalidScriptError(
+                block_line,
+                "stage directions must be valid and in a separate paragraph",
+            )
+
+        sentences = _split_sentences(block)
+        for sentence_index, sentence in enumerate(sentences):
+            segments.append(
+                ScriptSegment(
+                    kind="text",
+                    line=block_line,
+                    text=sentence,
+                    voice_speed=voice_speed,
+                    emotion=emotion,
+                    narration_mode=narration_mode,
+                    paragraph_end=sentence_index == len(sentences) - 1,
+                )
+            )
+
+    if not any(segment.kind == "text" for segment in segments):
+        raise InvalidScriptError(1, "script contains no narration text")
+    return segments
+
+
 def classify_text(text: str, language_family: str) -> Tuple[str, str]:
     """Classify emotion and context with language-specific, extensible rules."""
     stripped = text.strip()
@@ -438,6 +664,21 @@ def resolve_voice(
     if not candidates:
         return None
 
+    preferred_voice_id = AUTO_VOICE_DEFAULTS.get(language_family)
+    if preferred_voice_id:
+        for voice in candidates:
+            if voice["key"] == preferred_voice_id:
+                return voice
+
+    preferred_locale = AUTO_LOCALE_DEFAULTS.get(language_family)
+    preferred = [
+        voice
+        for voice in candidates
+        if voice.get("language", {}).get("code") == preferred_locale
+    ]
+    if preferred:
+        candidates = preferred
+
     for voice in candidates:
         if voice["key"] == default_voice_id and voice.get("installed"):
             return voice
@@ -451,15 +692,6 @@ def resolve_voice(
                 voice["key"],
             ),
         )
-
-    preferred_locale = AUTO_LOCALE_DEFAULTS.get(language_family)
-    preferred = [
-        voice
-        for voice in candidates
-        if voice.get("language", {}).get("code") == preferred_locale
-    ]
-    if preferred:
-        candidates = preferred
 
     return min(
         candidates,
@@ -506,8 +738,23 @@ class TextAnalyzer:
         text: str,
         voices: Sequence[Mapping[str, Any]],
         default_voice_id: str,
+        *,
+        delivery: str = "adaptive",
+        voice_speed: float = 1.0,
+        manual_voice_id: Optional[str] = None,
+        emotion: str = "auto",
     ) -> Dict[str, Any]:
         """Analyze text and resolve the most suitable Piper voice."""
+        if delivery not in ("adaptive", "fixed"):
+            raise ValueError("delivery must be adaptive or fixed")
+        emotion_mode = emotion.strip().casefold()
+        if emotion_mode not in EMOTION_VALUES:
+            choices = ", ".join(sorted(EMOTION_VALUES))
+            raise ValueError(f"emotion must be one of: {choices}")
+        parsed_segments = parse_script(text, voice_speed, emotion_mode)
+        narration_text = " ".join(
+            segment.text for segment in parsed_segments if segment.kind == "text"
+        )
         default_voice = next(
             (voice for voice in voices if voice["key"] == default_voice_id), None
         )
@@ -516,12 +763,21 @@ class TextAnalyzer:
             if default_voice
             else "en"
         )
-        letter_count = sum(char.isalpha() for char in text)
+        letter_count = sum(char.isalpha() for char in narration_text)
         fallback_reason: Optional[str] = None
         confidence = 0.0
         language_family = default_family
+        voice: Optional[Dict[str, Any]] = None
 
-        if letter_count < 3:
+        if manual_voice_id:
+            voice = next(
+                (dict(item) for item in voices if item["key"] == manual_voice_id), None
+            )
+            if voice is None:
+                raise ValueError(f"Unknown voice: {manual_voice_id}")
+            language_family = voice.get("language", {}).get("family", default_family)
+            confidence = 1.0
+        elif letter_count < 3:
             fallback_reason = "text_too_short"
         else:
             families = {
@@ -530,7 +786,9 @@ class TextAnalyzer:
                 if voice.get("language", {}).get("family")
             }
             detector = self._get_detector(families)
-            confidence_values = detector.compute_language_confidence_values(text)
+            confidence_values = detector.compute_language_confidence_values(
+                narration_text
+            )
             if confidence_values:
                 detected_language, confidence = confidence_values[0]
                 detected_family = detected_language.iso_code_639_1.name.casefold()
@@ -542,10 +800,99 @@ class TextAnalyzer:
                 language_family = default_family
                 fallback_reason = "low_confidence"
 
-        emotion, context = classify_text(text, language_family)
-        voice = resolve_voice(language_family, voices, default_voice_id)
+        detected_emotion, context = classify_text(narration_text, language_family)
+        overall_emotion = detected_emotion if emotion_mode == "auto" else emotion_mode
+        if voice is None:
+            voice = resolve_voice(language_family, voices, default_voice_id)
         if voice is None:
             fallback_reason = fallback_reason or "no_voice_for_language"
+
+        text_segment_indexes = [
+            index
+            for index, segment in enumerate(parsed_segments)
+            if segment.kind == "text"
+        ]
+        last_text_index = text_segment_indexes[-1]
+        analyzed_segments: List[Dict[str, Any]] = []
+        for index, segment in enumerate(parsed_segments):
+            if segment.kind == "pause":
+                analyzed_segments.append(
+                    {
+                        "kind": "pause",
+                        "line": segment.line,
+                        "pause": segment.pause,
+                    }
+                )
+                continue
+
+            detected_segment_emotion, segment_context = classify_text(
+                segment.text, language_family
+            )
+            segment_emotion = (
+                detected_segment_emotion
+                if segment.emotion == "auto"
+                else segment.emotion
+            )
+            word_count = len(_tokens(segment.text))
+            has_terminal = bool(re.search(r"[.!?…][\"'”’\])}]*$", segment.text.strip()))
+            if segment.narration_mode == "fragment" or (
+                not has_terminal and word_count <= 12
+            ):
+                segment_context = "fragment"
+
+            if delivery == "adaptive":
+                segment_prosody = prosody_for(segment_emotion, segment_context)
+            elif segment.emotion != "auto":
+                segment_prosody = prosody_for(segment_emotion, "conversation")
+            else:
+                segment_prosody = prosody_for("neutral", "conversation")
+            segment_prosody["length_scale"] = round(
+                segment_prosody["length_scale"] / segment.voice_speed, 4
+            )
+
+            pause_after = 0.0
+            if delivery == "adaptive" and index != last_text_index:
+                pause_after = CONTEXT_PAUSES.get(segment_context, 0.0)
+                if segment.paragraph_end:
+                    pause_after = max(pause_after, PARAGRAPH_PAUSE)
+
+            analyzed_segments.append(
+                {
+                    "kind": "text",
+                    "line": segment.line,
+                    "text": segment.text,
+                    "context": segment_context,
+                    "emotion": segment_emotion,
+                    "emotion_override": (
+                        None if segment.emotion == "auto" else segment.emotion
+                    ),
+                    "voice_speed": segment.voice_speed,
+                    "narration_mode": segment.narration_mode,
+                    "paragraph_end": segment.paragraph_end,
+                    "prosody": segment_prosody,
+                    "pause_after": round(pause_after, 3),
+                }
+            )
+
+        text_details = [
+            segment for segment in analyzed_segments if segment["kind"] == "text"
+        ]
+        if len(text_details) == 1:
+            overall_emotion = text_details[0]["emotion"]
+            context = text_details[0]["context"]
+        elif text_details and len({item["emotion"] for item in text_details}) == 1:
+            overall_emotion = text_details[0]["emotion"]
+        overall_prosody = prosody_for(
+            (
+                overall_emotion
+                if delivery == "adaptive" or emotion_mode != "auto"
+                else "neutral"
+            ),
+            context if delivery == "adaptive" else "conversation",
+        )
+        overall_prosody["length_scale"] = round(
+            overall_prosody["length_scale"] / voice_speed, 4
+        )
 
         return {
             "language": {
@@ -557,9 +904,13 @@ class TextAnalyzer:
                 "confidence": round(float(confidence), 4),
             },
             "context": context,
-            "emotion": emotion,
+            "emotion": overall_emotion,
+            "emotion_override": None if emotion_mode == "auto" else emotion_mode,
             "voice": voice,
-            "prosody": prosody_for(emotion, context),
+            "delivery": delivery,
+            "voice_speed": voice_speed,
+            "prosody": overall_prosody,
+            "segments": analyzed_segments,
             "installed": bool(voice and voice.get("installed")),
             "needs_download": bool(voice and not voice.get("installed")),
             "fallback_reason": fallback_reason,
