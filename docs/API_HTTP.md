@@ -1,5 +1,7 @@
 # HTTP API
 
+## Install from PyPI
+
 Install the HTTP server and local language detector dependencies:
 
 ```sh
@@ -30,10 +32,148 @@ python3 -m piper.http_server -m en_US-lessac-medium
 The server listens on port 5000 by default. Use `--host` and `--port` to
 override it, and `--data-dir <DIR>` to add directories containing voice files.
 
+## Run the HTTP server from source on Linux and macOS
+
+The following setups assume that Python 3.12 is installed and that the current
+directory is the root of a Piper source checkout. Choose one setup; do not run
+all three. Each setup downloads `en_US-lessac-medium` and serves the web
+interface at [http://127.0.0.1:7860](http://127.0.0.1:7860).
+
+Building from source also requires Git and a C/C++ build toolchain. On macOS,
+install the Xcode Command Line Tools. On Linux, install your distribution's C/C++
+build tools and Python 3.12 virtual environment support.
+
+The temporary setups use `/private/tmp` on macOS and `/tmp` on Linux. Files in
+either location may be removed by the operating system, so a virtual environment
+or voice stored there may need to be recreated.
+
+### 1. Temporary environment and temporary voices
+
+This setup keeps both the Python environment and voice files outside the
+checkout. It installs a non-editable snapshot of the source, so run the install
+command again after changing the source code.
+
+```sh
+PIPER_TEMP_ROOT=/tmp
+if [ "$(uname -s)" = "Darwin" ]; then
+  PIPER_TEMP_ROOT=/private/tmp
+fi
+
+python3.12 -m venv "${PIPER_TEMP_ROOT}/piper1-gpl-env"
+
+"${PIPER_TEMP_ROOT}/piper1-gpl-env/bin/python" -m pip install --upgrade pip
+"${PIPER_TEMP_ROOT}/piper1-gpl-env/bin/python" -m pip install '.[http]'
+
+mkdir -p "${PIPER_TEMP_ROOT}/piper1-gpl-voices"
+"${PIPER_TEMP_ROOT}/piper1-gpl-env/bin/python" -m piper.download_voices \
+  --download-dir "${PIPER_TEMP_ROOT}/piper1-gpl-voices" \
+  en_US-lessac-medium
+
+"${PIPER_TEMP_ROOT}/piper1-gpl-env/bin/python" -m piper.http_server \
+  --host 127.0.0.1 \
+  --port 7860 \
+  --data-dir "${PIPER_TEMP_ROOT}/piper1-gpl-voices" \
+  --download-dir "${PIPER_TEMP_ROOT}/piper1-gpl-voices" \
+  -m en_US-lessac-medium
+```
+
+Open [http://127.0.0.1:7860](http://127.0.0.1:7860).
+
+### 2. Project environment and project-local voices
+
+This setup keeps the editable development environment and voices with the
+checkout. The ignored `local/voices` directory persists until it is removed
+manually.
+
+```sh
+python3.12 -m venv .venv
+source .venv/bin/activate
+
+python -m pip install --upgrade pip
+python -m pip install -e '.[http,dev]'
+./script/dev_build
+
+mkdir -p local/voices
+python -m piper.download_voices \
+  --download-dir local/voices \
+  en_US-lessac-medium
+
+python -m piper.http_server \
+  --host 127.0.0.1 \
+  --port 7860 \
+  --data-dir local/voices \
+  --download-dir local/voices \
+  -m en_US-lessac-medium
+```
+
+Open [http://127.0.0.1:7860](http://127.0.0.1:7860).
+
+### 3. Project environment and temporary voices (recommended)
+
+This setup keeps the editable development environment in the checkout while
+placing the larger voice files in the operating system's temporary directory.
+
+```sh
+PIPER_TEMP_ROOT=/tmp
+if [ "$(uname -s)" = "Darwin" ]; then
+  PIPER_TEMP_ROOT=/private/tmp
+fi
+
+python3.12 -m venv .venv
+source .venv/bin/activate
+
+python -m pip install --upgrade pip
+python -m pip install -e '.[http,dev]'
+./script/dev_build
+
+mkdir -p "${PIPER_TEMP_ROOT}/piper1-gpl-voices"
+python -m piper.download_voices \
+  --download-dir "${PIPER_TEMP_ROOT}/piper1-gpl-voices" \
+  en_US-lessac-medium
+
+python -m piper.http_server \
+  --host 127.0.0.1 \
+  --port 7860 \
+  --data-dir "${PIPER_TEMP_ROOT}/piper1-gpl-voices" \
+  --download-dir "${PIPER_TEMP_ROOT}/piper1-gpl-voices" \
+  -m en_US-lessac-medium
+```
+
+Open [http://127.0.0.1:7860](http://127.0.0.1:7860).
+
+### Optional clean reset
+
+Stop the HTTP server before resetting its environment. Use only the command for
+the environment selected above:
+
+```sh
+# Setup 1
+PIPER_TEMP_ROOT=/tmp
+if [ "$(uname -s)" = "Darwin" ]; then
+  PIPER_TEMP_ROOT=/private/tmp
+fi
+rm -rf "${PIPER_TEMP_ROOT}/piper1-gpl-env"
+
+# Setups 2 and 3
+deactivate 2>/dev/null || true
+rm -rf .venv
+```
+
+If a Python 3.12 build fails because CMake references a stale temporary Ninja
+path, remove the generated build cache before installing again:
+
+```sh
+rm -rf _skbuild
+```
+
+These reset commands preserve both `${PIPER_TEMP_ROOT}/piper1-gpl-voices` and
+`local/voices`.
+
 ## Web interface
 
-Open [http://localhost:5000](http://localhost:5000). The interface has two
-voice-selection modes:
+Open [http://localhost:5000](http://localhost:5000) for the PyPI example, or
+[http://127.0.0.1:7860](http://127.0.0.1:7860) for the Linux and macOS source
+setups. The interface has two voice-selection modes:
 
 * **Auto Detect** detects the dominant language and selects a matching voice.
   English and Vietnamese also have local context/emotion rules that adjust

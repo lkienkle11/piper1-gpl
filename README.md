@@ -8,6 +8,9 @@ Install with:
 pip install piper-tts
 ```
 
+To run the HTTP server directly from a source checkout, see the
+[Linux and macOS source setup options](docs/API_HTTP.md#run-the-http-server-from-source-on-linux-and-macos).
+
 * 🎧 [Samples][samples]
 * 💡 [Demo][demo]
 * 🗣️ [Voices][voices]

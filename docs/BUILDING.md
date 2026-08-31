@@ -30,6 +30,10 @@ Now you should be able to use `script/run` or manually run Piper:
 python3 -m piper --help
 ```
 
+For complete source-checkout HTTP server setups, including local and temporary
+voice storage options, see [Run the HTTP server from source on Linux and
+macOS](API_HTTP.md#run-the-http-server-from-source-on-linux-and-macos).
+
 You can manually build wheels with:
 
 ``` sh
