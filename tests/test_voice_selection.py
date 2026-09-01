@@ -124,6 +124,46 @@ def test_normalize_and_resolve_voice_priority() -> None:
     assert selected["key"] == "en_GB-alan-low"
 
 
+def test_normalize_preserves_language_metadata_and_speaker_mapping() -> None:
+    raw = {
+        "en_GB-aru-medium": {
+            "key": "en_GB-aru-medium",
+            "language": {
+                "code": "en_GB",
+                "family": "en",
+                "name_native": "English",
+                "name_english": "English",
+                "country_english": "Great Britain",
+            },
+            "name": "aru",
+            "quality": "medium",
+            "num_speakers": 2,
+            "speaker_id_map": {"03": 0, "06": 1},
+            "files": {"voice.onnx": {"size_bytes": 789}},
+        }
+    }
+
+    voices = normalize_voice_catalog(raw, set())
+
+    assert voices == [
+        {
+            "key": "en_GB-aru-medium",
+            "language": {
+                "code": "en_GB",
+                "family": "en",
+                "region": "",
+                "name_native": "English",
+                "name_english": "English",
+                "country_english": "Great Britain",
+            },
+            "name": "aru",
+            "quality": "medium",
+            "num_speakers": 2,
+            "speakers": {"03": 0, "06": 1},
+            "model_size_bytes": 789,
+            "installed": False,
+        }
+    ]
 def test_resolver_prefers_configured_british_voice_before_installed_us() -> None:
     voices = [
         _catalog_voice("en_US-lessac-medium", "en", "en_US", "lessac", "medium", True),

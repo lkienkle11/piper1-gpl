@@ -261,6 +261,7 @@
     .notice { padding: 11px 13px; border-radius: 10px; color: var(--warn); background: var(--warn-bg); }
     .error { padding: 11px 13px; border-radius: 10px; color: var(--danger); background: var(--danger-bg); }
     .hidden { display: none !important; }
+    .internal-only { display: none !important; }
     .details { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
     table { width: 100%; border-collapse: collapse; }
     th, td { padding: 8px 9px; border-bottom: 1px solid var(--line); text-align: left; vertical-align: top; }
@@ -383,7 +384,7 @@
 
       <textarea id="textInput" placeholder="Enter text to speak..." aria-label="Text to speak"></textarea>
 
-      <section id="autoPanel" class="stack" aria-live="polite">
+      <section id="autoPanel" class="stack internal-only" aria-live="polite" aria-hidden="true">
         <div id="autoEmpty" class="muted">Enter at least three letters to detect language, context and emotion.</div>
         <div id="analysisPanel" class="analysis hidden">
           <div class="metric auto-analysis-only"><span>Language</span><strong id="detectedLanguage">—</strong></div>
@@ -410,10 +411,6 @@
           <select id="qualitySelect"></select>
         </div>
         <div class="field">
-          <label for="speakerSelect">Speaker</label>
-          <select id="speakerSelect" disabled></select>
-        </div>
-        <div class="field">
           <label for="manualEmotionSelect">Emotion</label>
           <select id="manualEmotionSelect">
             <option value="auto">Auto detect</option>
@@ -426,7 +423,7 @@
         </div>
       </section>
 
-      <section class="delivery-card stack" aria-labelledby="deliveryHeading">
+      <section class="delivery-card stack internal-only" aria-labelledby="deliveryHeading" aria-hidden="true" inert>
         <div class="delivery-header">
           <h2 id="deliveryHeading">Delivery</h2>
           <span class="muted">Used by Auto and Manual Voice</span>
@@ -549,7 +546,7 @@
       </div>
     </div>
 
-    <div class="details">
+    <div class="details internal-only" aria-hidden="true">
       <section class="card">
         <h2>Last synthesis</h2>
         <p id="lastEmpty" class="muted">Nothing synthesized yet.</p>
@@ -578,6 +575,8 @@
     const MIN_PLAYBACK_RATE = 0.10;
     const MAX_PLAYBACK_RATE = 5.00;
     const VOICE_SPEED_PRESETS = { slow: 0.85, normal: 1, fast: 1.15 };
+    const STANDARD_DELIVERY_SETTINGS = Object.freeze({ mode: "adaptive", voiceSpeedPreset: "normal", voiceSpeed: 1 });
+    const DEBUG_DELIVERY_OVERRIDES_ENABLED = false;
     const DEFAULT_SETTINGS = {
       version: 1,
       updatedAt: "",
@@ -752,6 +751,7 @@
       mode: storedSettings.selection.mode,
       settings: storedSettings,
       voices: [],
+      manualVoiceChoices: [],
       analysis: null,
       downloading: false,
       analyzeTimer: null,
@@ -781,7 +781,6 @@
       language: document.getElementById("languageSelect"),
       name: document.getElementById("nameSelect"),
       quality: document.getElementById("qualitySelect"),
-      speaker: document.getElementById("speakerSelect"),
       manualEmotion: document.getElementById("manualEmotionSelect"),
       deliveryMode: document.getElementById("deliveryModeSelect"),
       voiceSpeedPreset: document.getElementById("voiceSpeedPresetSelect"),
@@ -843,33 +842,47 @@
       elements.storageWarning.textContent = message;
       setHidden(elements.storageWarning, !message);
     }
-    function synthesisVoiceSpeed() {
+    function effectiveDeliverySettings() {
+      if (DEBUG_DELIVERY_OVERRIDES_ENABLED) {
+        return {
+          mode: elements.deliveryMode.value,
+          voiceSpeedPreset: elements.voiceSpeedPreset.value,
+          voiceSpeed: synthesisVoiceSpeedFromControls(),
+        };
+      }
+      return { ...STANDARD_DELIVERY_SETTINGS };
+    }
+    function synthesisVoiceSpeedFromControls() {
       const preset = elements.voiceSpeedPreset.value;
       if (preset !== "custom") return VOICE_SPEED_PRESETS[preset] || 1;
       return boundedNumber(elements.customVoiceSpeed.value, state.settings.delivery.voiceSpeed, 0.5, 2);
+    }
+    function synthesisVoiceSpeed() {
+      return effectiveDeliverySettings().voiceSpeed;
     }
     function persistDeliverySettings() {
       state.settings = SettingsStore.update((settings) => {
         settings.delivery.mode = elements.deliveryMode.value;
         settings.delivery.voiceSpeedPreset = elements.voiceSpeedPreset.value;
-        settings.delivery.voiceSpeed = synthesisVoiceSpeed();
+        settings.delivery.voiceSpeed = synthesisVoiceSpeedFromControls();
       });
       renderStorageWarning();
     }
     function persistManualSelection() {
+      const choice = currentManualChoice();
       const voice = currentManualVoice();
-      if (!voice) return;
+      if (!voice || !choice) return;
       state.settings = SettingsStore.update((settings) => {
         settings.selection.manualVoiceKey = voice.key;
-        if (elements.speaker.disabled || !elements.speaker.value) {
+        if (choice.speakerName === null && choice.speakerId === null) {
           settings.selection.speakerName = null;
           settings.selection.speakerId = null;
-        } else if (Object.keys(voice.speakers || {}).length) {
-          settings.selection.speakerName = elements.speaker.value;
+        } else if (choice.speakerName !== null) {
+          settings.selection.speakerName = choice.speakerName;
           settings.selection.speakerId = null;
         } else {
           settings.selection.speakerName = null;
-          settings.selection.speakerId = Number(elements.speaker.value);
+          settings.selection.speakerId = choice.speakerId;
         }
       });
       renderStorageWarning();
@@ -1165,11 +1178,84 @@
       return state.voices.find((voice) => voice.installed)?.language.code || "";
     }
 
+    function languageLabel(language) {
+      const name = language?.name_native || language?.name_english || "Unknown language";
+      let country = language?.country_english || "";
+      if (!country && language?.region && typeof Intl.DisplayNames === "function") {
+        try {
+          country = new Intl.DisplayNames(["en"], { type: "region" }).of(language.region) || "";
+        } catch (_error) { /* catalog region is optional */ }
+      }
+      return country && !name.toLowerCase().includes(country.toLowerCase())
+        ? `${name} (${country})`
+        : name;
+    }
+
+    function speakerVariants(voice) {
+      const speakerCount = Number(voice?.num_speakers) || 1;
+      if (speakerCount <= 1) return [{ speakerName: null, speakerId: null }];
+      const speakers = Object.entries(voice.speakers || {});
+      if (speakers.length) {
+        return speakers
+          .sort((left, right) => Number(left[1]) - Number(right[1]))
+          .map(([speakerName, speakerId]) => ({ speakerName, speakerId: Number(speakerId) }));
+      }
+      return Array.from({ length: speakerCount }, (_value, speakerId) => ({
+        speakerName: null,
+        speakerId,
+      }));
+    }
+
+    function manualVoiceChoiceId(voiceName, speakerName, speakerId) {
+      return JSON.stringify([voiceName, speakerName, speakerId]);
+    }
+
+    function manualVoiceChoices() {
+      const choices = [];
+      const seen = new Set();
+      for (const voice of state.voices.filter((item) => item.language.code === elements.language.value)) {
+        for (const variant of speakerVariants(voice)) {
+          const id = manualVoiceChoiceId(voice.name, variant.speakerName, variant.speakerId);
+          if (seen.has(id)) continue;
+          seen.add(id);
+          const speakerLabel = variant.speakerName || (
+            variant.speakerId === null ? "" : `Speaker ${variant.speakerId}`
+          );
+          choices.push({
+            id,
+            voiceName: voice.name,
+            speakerName: variant.speakerName,
+            speakerId: variant.speakerId,
+            label: speakerLabel
+              ? `${voice.name} - ${speakerLabel} (${variant.speakerId})`
+              : voice.name,
+          });
+        }
+      }
+      return choices.sort((left, right) => left.label.localeCompare(right.label));
+    }
+
+    function currentManualChoice() {
+      return state.manualVoiceChoices.find((choice) => choice.id === elements.name.value) || null;
+    }
+
+    function choiceMatchesVoice(choice, voice) {
+      if (!choice || !voice || choice.voiceName !== voice.name) return false;
+      if ((Number(voice.num_speakers) || 1) <= 1) {
+        return choice.speakerName === null && choice.speakerId === null;
+      }
+      if (Object.keys(voice.speakers || {}).length) {
+        return choice.speakerName !== null
+          && Number(voice.speakers[choice.speakerName]) === choice.speakerId;
+      }
+      return choice.speakerName === null && choice.speakerId !== null;
+    }
+
     function renderQuickVoices() {
       const languageCode = quickVoiceLanguageCode();
       const language = state.voices.find((voice) => voice.language.code === languageCode)?.language;
       document.getElementById("voicePopoverTitle").textContent = language
-        ? `Installed voices · ${language.name_native || language.name_english || languageCode}`
+        ? `Installed voices · ${languageLabel(language)}`
         : "Installed voices";
       const voices = state.voices
         .filter((voice) => voice.installed && voice.language.code === languageCode)
@@ -1178,8 +1264,8 @@
       if (!voices.length) {
         const empty = document.createElement("p");
         empty.className = "quick-voice-empty";
-        empty.textContent = languageCode
-          ? `No installed voices for ${languageCode}.`
+        empty.textContent = language
+          ? `No installed voices for ${languageLabel(language)}.`
           : "No language is available yet.";
         elements.quickVoiceList.append(empty);
         return;
@@ -1204,7 +1290,7 @@
 
     function selectQuickVoice(voice) {
       elements.language.value = voice.language.code;
-      updateManualNames(voice.name, voice.quality);
+      updateManualNames({ voiceKey: voice.key }, voice.quality);
       elements.modeManual.checked = true;
       elements.modeAuto.checked = false;
       switchMode("manual");
@@ -1227,60 +1313,58 @@
     }
 
     function currentManualVoice() {
+      const choice = currentManualChoice();
       return state.voices.find((voice) =>
         voice.language.code === elements.language.value &&
-        voice.name === elements.name.value &&
-        voice.quality === elements.quality.value
+        voice.quality === elements.quality.value &&
+        choiceMatchesVoice(choice, voice)
       ) || null;
     }
 
-    function updateManualNames(preferred, preferredQuality, preferredSpeaker) {
-      const voices = state.voices.filter((voice) => voice.language.code === elements.language.value);
-      const names = unique(voices.map((voice) => voice.name)).sort();
-      const selected = names.includes(preferred) ? preferred : names[0];
-      fillSelect(elements.name, names, selected, (value) => value);
-      updateManualQualities(preferredQuality, preferredSpeaker);
+    function updateManualNames(preferred = {}, preferredQuality) {
+      state.manualVoiceChoices = manualVoiceChoices();
+      let selected = null;
+      if (preferred.choiceId && state.manualVoiceChoices.some((choice) => choice.id === preferred.choiceId)) {
+        selected = preferred.choiceId;
+      } else if (preferred.voiceKey) {
+        const preferredVoice = state.voices.find((voice) => voice.key === preferred.voiceKey);
+        const preferredChoice = state.manualVoiceChoices.find((choice) =>
+          preferredVoice && choiceMatchesVoice(choice, preferredVoice) &&
+          (preferred.speakerName === undefined || choice.speakerName === preferred.speakerName) &&
+          (preferred.speakerId === undefined || choice.speakerId === preferred.speakerId)
+        );
+        selected = preferredChoice?.id || null;
+      } else if (preferred.voiceName) {
+        selected = state.manualVoiceChoices.find((choice) => choice.voiceName === preferred.voiceName)?.id || null;
+      }
+      selected = selected || state.manualVoiceChoices[0]?.id || "";
+      fillSelect(
+        elements.name,
+        state.manualVoiceChoices.map((choice) => choice.id),
+        selected,
+        (value) => state.manualVoiceChoices.find((choice) => choice.id === value)?.label || value,
+      );
+      updateManualQualities(preferredQuality);
     }
 
-    function updateManualQualities(preferred, preferredSpeaker) {
+    function updateManualQualities(preferred) {
+      const choice = currentManualChoice();
       const voices = state.voices.filter((voice) =>
-        voice.language.code === elements.language.value && voice.name === elements.name.value
+        voice.language.code === elements.language.value &&
+        choiceMatchesVoice(choice, voice)
       );
       const priority = ["medium", "high", "low", "x_low"];
       const qualities = unique(voices.map((voice) => voice.quality))
         .sort((a, b) => priority.indexOf(a) - priority.indexOf(b));
       const selected = qualities.includes(preferred) ? preferred : qualities[0];
       fillSelect(elements.quality, qualities, selected, titleCase);
-      updateManualSpeakers(preferredSpeaker);
-    }
-
-    function updateManualSpeakers(preferred) {
-      const voice = currentManualVoice();
-      const speakers = voice ? Object.entries(voice.speakers || {}) : [];
-      elements.speaker.replaceChildren();
-      if (!voice || voice.num_speakers <= 1) {
-        const option = new Option("Default speaker", "");
-        elements.speaker.add(option);
-        elements.speaker.disabled = true;
-      } else if (speakers.length) {
-        for (const [name, id] of speakers.sort((a, b) => a[1] - b[1])) {
-          elements.speaker.add(new Option(`${name} (${id})`, name, false, name === preferred));
-        }
-        elements.speaker.disabled = false;
-      } else {
-        for (let id = 0; id < voice.num_speakers; id += 1) {
-          elements.speaker.add(new Option(`Speaker ${id}`, String(id), false, String(id) === preferred));
-        }
-        elements.speaker.disabled = false;
-      }
       renderVoiceStatus();
     }
 
     function populateManualSelectors() {
       const oldLanguage = elements.language.value;
-      const oldName = elements.name.value;
+      const oldChoice = currentManualChoice();
       const oldQuality = elements.quality.value;
-      const oldSpeaker = elements.speaker.value;
       const languages = unique(state.voices.map((voice) => voice.language.code)).sort();
       const installed = state.voices.find((voice) => voice.installed);
       const storedVoice = state.voices.find((voice) => voice.key === state.settings.selection.manualVoiceKey);
@@ -1289,16 +1373,27 @@
         : (storedVoice?.language.code || installed?.language.code || languages[0]);
       fillSelect(elements.language, languages, selected, (code) => {
         const voice = state.voices.find((item) => item.language.code === code);
-        const language = voice?.language || {};
-        const name = language.name_native || language.name_english || code;
-        return `${name} — ${code}${language.country_english ? ` (${language.country_english})` : ""}`;
+        return languageLabel(voice?.language);
       });
-      const preferredSpeaker = oldSpeaker || state.settings.selection.speakerName
-        || (state.settings.selection.speakerId === null ? "" : String(state.settings.selection.speakerId));
+      state.manualVoiceChoices = manualVoiceChoices();
+      const storedChoice = state.manualVoiceChoices.find((choice) =>
+        storedVoice && choiceMatchesVoice(choice, storedVoice) &&
+        (state.settings.selection.speakerName === null
+          ? choice.speakerName === null
+          : choice.speakerName === state.settings.selection.speakerName) &&
+        (state.settings.selection.speakerId === null
+          ? choice.speakerId === null
+          : choice.speakerId === state.settings.selection.speakerId)
+      );
       updateManualNames(
-        oldName || storedVoice?.name,
+        oldLanguage === selected && oldChoice
+          ? { choiceId: oldChoice.id }
+          : storedChoice
+            ? { choiceId: storedChoice.id }
+            : storedVoice
+              ? { voiceKey: storedVoice.key }
+              : {},
         oldQuality || storedVoice?.quality,
-        preferredSpeaker,
       );
     }
 
@@ -1317,7 +1412,8 @@
         return;
       }
 
-      elements.selectedVoice.textContent = voice.key;
+      const choice = state.mode === "manual" ? currentManualChoice() : null;
+      elements.selectedVoice.textContent = `${choice?.label || voice.name} · ${titleCase(voice.quality)}`;
       elements.installedBadge.textContent = voice.installed ? "Installed" : "Download required";
       elements.installedBadge.className = `badge ${voice.installed ? "ready" : "missing"}`;
       setHidden(elements.installedBadge, false);
@@ -1334,74 +1430,15 @@
     }
 
     function analysisEnabledForMode() {
-      return state.mode === "auto" || elements.deliveryMode.value === "adaptive";
+      return true;
     }
 
     function updateAnalysisPresentation() {
-      const manualAdaptive = state.mode === "manual" && elements.deliveryMode.value === "adaptive";
-      setHidden(elements.autoPanel, !analysisEnabledForMode());
-      elements.analysisPanel.classList.toggle("manual-delivery", manualAdaptive);
-      for (const metric of elements.analysisPanel.querySelectorAll(".auto-analysis-only")) {
-        setHidden(metric, manualAdaptive);
-      }
-      elements.autoEmpty.textContent = manualAdaptive
-        ? "Enter text to analyze context, emotion and segment delivery."
-        : "Enter at least three letters to detect language, context and emotion.";
+      setHidden(elements.autoPanel, true);
     }
 
     function renderAnalysis() {
       updateAnalysisPresentation();
-      if (!analysisEnabledForMode()) {
-        setHidden(elements.analysisPanel, true);
-        setHidden(elements.segmentPreview, true);
-        setHidden(elements.autoFallback, true);
-        renderVoiceStatus();
-        return;
-      }
-      const result = state.analysis;
-      setHidden(elements.autoEmpty, Boolean(result));
-      setHidden(elements.analysisPanel, !result);
-      if (!result) {
-        setHidden(elements.autoFallback, true);
-        elements.segmentPreview.replaceChildren();
-        setHidden(elements.segmentPreview, true);
-        renderVoiceStatus();
-        return;
-      }
-
-      const language = result.language;
-      document.getElementById("detectedLanguage").textContent =
-        `${language.name || language.family || "Unknown"}${language.code ? ` (${language.code})` : ""}`;
-      document.getElementById("detectedConfidence").textContent = `${Math.round(language.confidence * 100)}%`;
-      document.getElementById("detectedContext").textContent = titleCase(result.context);
-      document.getElementById("detectedEmotion").textContent = titleCase(result.emotion);
-      document.getElementById("detectedVoice").textContent = result.voice?.key || "None";
-
-      const reasons = {
-        text_too_short: "The text is too short, so the default voice language is used.",
-        low_confidence: "Language confidence is low, so the default voice language is used.",
-        no_voice_for_language: "No Piper voice exists for the detected language.",
-      };
-      elements.autoFallback.textContent = reasons[result.fallback_reason] || "";
-      setHidden(elements.autoFallback, state.mode === "manual" || !result.fallback_reason);
-      elements.segmentPreview.replaceChildren();
-      for (const segment of result.segments || []) {
-        const item = document.createElement("div");
-        item.className = "segment";
-        if (segment.kind === "pause") {
-          const title = document.createElement("strong");
-          title.textContent = `Explicit pause · ${segment.pause}s`;
-          item.append(title);
-        } else {
-          const title = document.createElement("strong");
-          title.textContent = `${titleCase(segment.context)} / ${titleCase(segment.emotion)} · ${segment.voice_speed.toFixed(2)}x · pause ${segment.pause_after}s`;
-          const content = document.createElement("span");
-          content.textContent = segment.text;
-          item.append(title, content);
-        }
-        elements.segmentPreview.append(item);
-      }
-      setHidden(elements.segmentPreview, !(result.segments || []).length);
       renderVoiceStatus();
     }
 
@@ -1457,7 +1494,7 @@
             mode: state.mode,
             voice: state.mode === "manual" ? voice.key : undefined,
             emotion: state.mode === "manual" ? elements.manualEmotion.value : undefined,
-            delivery: elements.deliveryMode.value,
+            delivery: effectiveDeliverySettings().mode,
             voice_speed: synthesisVoiceSpeed(),
           }),
         });
@@ -1542,15 +1579,17 @@
       const payload = {
         text,
         mode: state.mode,
-        delivery: elements.deliveryMode.value,
+        delivery: effectiveDeliverySettings().mode,
         voice_speed: synthesisVoiceSpeed(),
       };
       if (state.mode === "manual") {
+        const choice = currentManualChoice();
         payload.voice = voice.key;
         payload.emotion = elements.manualEmotion.value;
-        if (!elements.speaker.disabled && elements.speaker.value) {
-          if (Object.keys(voice.speakers || {}).length) payload.speaker = elements.speaker.value;
-          else payload.speaker_id = Number(elements.speaker.value);
+        if (choice?.speakerName !== null && choice?.speakerName !== undefined) {
+          payload.speaker = choice.speakerName;
+        } else if (choice?.speakerId !== null && choice?.speakerId !== undefined) {
+          payload.speaker_id = choice.speakerId;
         }
       }
 
@@ -1618,7 +1657,6 @@
         elements.language.value = "";
         elements.name.value = "";
         elements.quality.value = "";
-        elements.speaker.value = "";
         populateManualSelectors();
       }
       switchMode(settings.selection.mode, false);
@@ -1639,8 +1677,7 @@
     });
     elements.language.addEventListener("change", () => { updateManualNames(); persistManualSelection(); scheduleAnalysis(); });
     elements.name.addEventListener("change", () => { updateManualQualities(); persistManualSelection(); scheduleAnalysis(); });
-    elements.quality.addEventListener("change", () => { updateManualSpeakers(); persistManualSelection(); scheduleAnalysis(); });
-    elements.speaker.addEventListener("change", () => { persistManualSelection(); renderVoiceStatus(); scheduleAnalysis(); });
+    elements.quality.addEventListener("change", () => { persistManualSelection(); renderVoiceStatus(); scheduleAnalysis(); });
     elements.manualEmotion.addEventListener("change", () => { persistManualEmotion(); scheduleAnalysis(); });
     elements.deliveryMode.addEventListener("change", () => {
       persistDeliverySettings();
