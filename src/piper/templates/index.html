@@ -47,28 +47,6 @@
       box-shadow: var(--shadow);
     }
     .stack { display: grid; gap: 18px; }
-    .mode-switch {
-      display: inline-grid;
-      grid-template-columns: 1fr 1fr;
-      gap: 4px;
-      padding: 4px;
-      border-radius: 12px;
-      background: #e8eeeb;
-    }
-    .mode-switch input { position: absolute; opacity: 0; pointer-events: none; }
-    .mode-switch label {
-      padding: 9px 18px;
-      border-radius: 9px;
-      color: var(--muted);
-      cursor: pointer;
-      font-weight: 700;
-      text-align: center;
-    }
-    .mode-switch input:checked + label {
-      color: white;
-      background: var(--brand);
-      box-shadow: 0 4px 12px rgba(23, 107, 84, 0.24);
-    }
     textarea, select, button { font: inherit; }
     textarea {
       width: 100%; min-height: 150px; resize: vertical;
@@ -326,8 +304,6 @@
       .stack { gap: 14px; }
       textarea { min-height: 120px; padding: 12px; }
       .grid, .analysis { grid-template-columns: 1fr; }
-      .mode-switch { width: 100%; }
-      .mode-switch label { padding: 8px 6px; font-size: .9rem; }
       .analysis { gap: 8px; padding: 12px; }
       select { min-height: 44px; }
       .voice-status > strong { flex-basis: 100%; overflow-wrap: anywhere; }
@@ -349,7 +325,6 @@
       h1 { font-size: 1.35rem; }
       header p { display: none; }
       .card { padding: 12px; }
-      .mode-switch label { font-size: .82rem; }
       .audio-player {
         grid-template-columns: auto minmax(60px, 1fr) auto auto auto;
         gap: 5px;
@@ -370,18 +345,11 @@
       </a>
       <div>
         <h1>Piper Voice Studio</h1>
-        <p>Automatic language-aware delivery or precise manual voice control.</p>
+        <p>Choose a language, voice, and quality—or let Piper detect them automatically.</p>
       </div>
     </header>
 
     <div class="card stack">
-      <div class="mode-switch" role="radiogroup" aria-label="Voice selection mode">
-        <input id="modeAuto" type="radio" name="mode" value="auto" checked>
-        <label for="modeAuto">Auto Detect</label>
-        <input id="modeManual" type="radio" name="mode" value="manual">
-        <label for="modeManual">Manual Voice</label>
-      </div>
-
       <textarea id="textInput" placeholder="Enter text to speak..." aria-label="Text to speak"></textarea>
 
       <section id="autoPanel" class="stack internal-only" aria-live="polite" aria-hidden="true">
@@ -397,7 +365,7 @@
         <div id="autoFallback" class="notice hidden"></div>
       </section>
 
-      <section id="manualPanel" class="grid hidden">
+      <section id="manualPanel" class="grid" aria-label="Voice selection">
         <div class="field">
           <label for="languageSelect">Language</label>
           <select id="languageSelect"></select>
@@ -426,7 +394,7 @@
       <section class="delivery-card stack internal-only" aria-labelledby="deliveryHeading" aria-hidden="true" inert>
         <div class="delivery-header">
           <h2 id="deliveryHeading">Delivery</h2>
-          <span class="muted">Used by Auto and Manual Voice</span>
+          <span class="muted">Used by the voice selection panel</span>
         </div>
         <div class="grid">
           <div class="field">
@@ -577,12 +545,14 @@
     const VOICE_SPEED_PRESETS = { slow: 0.85, normal: 1, fast: 1.15 };
     const STANDARD_DELIVERY_SETTINGS = Object.freeze({ mode: "adaptive", voiceSpeedPreset: "normal", voiceSpeed: 1 });
     const DEBUG_DELIVERY_OVERRIDES_ENABLED = false;
+    const NATURAL_COLLATOR = new Intl.Collator(undefined, { numeric: true, sensitivity: "base" });
     const DEFAULT_SETTINGS = {
-      version: 1,
+      version: 2,
       updatedAt: "",
       selection: {
-        mode: "auto",
-        manualVoiceKey: "en_GB-cori-high",
+        language: "auto",
+        voice: "auto",
+        quality: "auto",
         manualEmotion: "auto",
         speakerName: null,
         speakerId: null,
@@ -602,20 +572,30 @@
       const selection = input.selection && typeof input.selection === "object" ? input.selection : {};
       const delivery = input.delivery && typeof input.delivery === "object" ? input.delivery : {};
       const player = input.player && typeof input.player === "object" ? input.player : {};
+      const isLegacy = input.version === 1;
       const speedPreset = ["slow", "normal", "fast", "custom"].includes(delivery.voiceSpeedPreset)
         ? delivery.voiceSpeedPreset : "normal";
+      const legacy = isLegacy
+        ? {
+          mode: ["auto", "manual"].includes(selection.mode) ? selection.mode : "auto",
+          manualVoiceKey: typeof selection.manualVoiceKey === "string" ? selection.manualVoiceKey : "",
+          speakerName: typeof selection.speakerName === "string" ? selection.speakerName : null,
+          speakerId: Number.isInteger(selection.speakerId) && selection.speakerId >= 0 ? selection.speakerId : null,
+        }
+        : (input.legacy && typeof input.legacy === "object" ? input.legacy : null);
       return {
-        version: 1,
+        version: 2,
         updatedAt: typeof input.updatedAt === "string" ? input.updatedAt : "",
         selection: {
-          mode: ["auto", "manual"].includes(selection.mode) ? selection.mode : "auto",
-          manualVoiceKey: typeof selection.manualVoiceKey === "string" && selection.manualVoiceKey
-            ? selection.manualVoiceKey : "en_GB-cori-high",
+          language: typeof selection.language === "string" && selection.language ? selection.language : "auto",
+          voice: typeof selection.voice === "string" && selection.voice ? selection.voice : "auto",
+          quality: typeof selection.quality === "string" && selection.quality ? selection.quality : "auto",
           manualEmotion: ["auto", "neutral", "happy", "sad", "angry", "excited"].includes(selection.manualEmotion)
             ? selection.manualEmotion : "auto",
           speakerName: typeof selection.speakerName === "string" ? selection.speakerName : null,
           speakerId: Number.isInteger(selection.speakerId) && selection.speakerId >= 0 ? selection.speakerId : null,
         },
+        legacy,
         delivery: {
           mode: ["adaptive", "fixed"].includes(delivery.mode) ? delivery.mode : "adaptive",
           voiceSpeedPreset: speedPreset,
@@ -653,7 +633,7 @@
           raw = localStorage.getItem(SETTINGS_STORAGE_KEY);
           if (raw) {
             const parsed = JSON.parse(raw);
-            if (parsed.version !== 1) throw new Error("Unsupported settings version");
+            if (![1, 2].includes(parsed.version)) throw new Error("Unsupported settings version");
             current = sanitizeSettings(parsed);
           }
           const legacyRate = Number(localStorage.getItem(LEGACY_PLAYBACK_RATE_STORAGE_KEY));
@@ -686,7 +666,7 @@
         }
         try {
           const parsed = JSON.parse(raw);
-          if (parsed.version !== 1) return;
+          if (![1, 2].includes(parsed.version)) return;
           current = sanitizeSettings(parsed);
           notify();
           return cloneValue(current);
@@ -748,7 +728,6 @@
     const storedDraft = SettingsStore.loadDraft();
 
     const state = {
-      mode: storedSettings.selection.mode,
       settings: storedSettings,
       voices: [],
       manualVoiceChoices: [],
@@ -767,8 +746,6 @@
     };
 
     const elements = {
-      modeAuto: document.getElementById("modeAuto"),
-      modeManual: document.getElementById("modeManual"),
       text: document.getElementById("textInput"),
       autoPanel: document.getElementById("autoPanel"),
       manualPanel: document.getElementById("manualPanel"),
@@ -824,6 +801,7 @@
 
     function setHidden(element, hidden) { element.classList.toggle("hidden", hidden); }
     function unique(values) { return [...new Set(values)]; }
+    function naturalCompare(left, right) { return NATURAL_COLLATOR.compare(String(left), String(right)); }
     function titleCase(value) { return value ? value.charAt(0).toUpperCase() + value.slice(1) : "—"; }
     function formatBytes(bytes) {
       if (!bytes) return "";
@@ -868,25 +846,29 @@
       });
       renderStorageWarning();
     }
-    function persistManualSelection() {
+    function selectedSpeakerForStorage(choice) {
+      if (!choice || (choice.speakerName === null && choice.speakerId === null)) {
+        return { speakerName: null, speakerId: null };
+      }
+      return choice.speakerName !== null
+        ? { speakerName: choice.speakerName, speakerId: null }
+        : { speakerName: null, speakerId: choice.speakerId };
+    }
+    function persistSelection() {
       const choice = currentManualChoice();
-      const voice = currentManualVoice();
-      if (!voice || !choice) return;
-      state.settings = SettingsStore.update((settings) => {
-        settings.selection.manualVoiceKey = voice.key;
-        if (choice.speakerName === null && choice.speakerId === null) {
-          settings.selection.speakerName = null;
-          settings.selection.speakerId = null;
-        } else if (choice.speakerName !== null) {
-          settings.selection.speakerName = choice.speakerName;
-          settings.selection.speakerId = null;
-        } else {
-          settings.selection.speakerName = null;
-          settings.selection.speakerId = choice.speakerId;
-        }
-      });
+      const speaker = selectedSpeakerForStorage(choice);
+      const next = {
+        language: elements.language.value || "auto",
+        voice: choice?.voiceFamilyId || "auto",
+        quality: elements.quality.value || "auto",
+        ...speaker,
+      };
+      const current = state.settings.selection;
+      if (Object.entries(next).every(([key, value]) => current[key] === value)) return;
+      state.settings = SettingsStore.update((settings) => Object.assign(settings.selection, next));
       renderStorageWarning();
     }
+    function persistManualSelection() { persistSelection(); }
     function persistManualEmotion() {
       state.settings = SettingsStore.update((settings) => {
         settings.selection.manualEmotion = elements.manualEmotion.value;
@@ -1173,8 +1155,8 @@
     }
 
     function quickVoiceLanguageCode() {
-      if (state.mode === "manual") return elements.language.value;
       if (state.analysis?.language?.code) return state.analysis.language.code;
+      if (elements.language.value && elements.language.value !== "auto") return elements.language.value;
       return state.voices.find((voice) => voice.installed)?.language.code || "";
     }
 
@@ -1193,46 +1175,81 @@
 
     function speakerVariants(voice) {
       const speakerCount = Number(voice?.num_speakers) || 1;
-      if (speakerCount <= 1) return [{ speakerName: null, speakerId: null }];
+      if (speakerCount <= 1) return [{ speakerName: null, speakerId: null, ordinal: 0 }];
       const speakers = Object.entries(voice.speakers || {});
+      if (speakerCount > 8) {
+        const firstSpeaker = speakers
+          .sort((left, right) => Number(left[1]) - Number(right[1]))[0];
+        return [{
+          speakerName: firstSpeaker?.[0] || null,
+          speakerId: firstSpeaker ? Number(firstSpeaker[1]) : 0,
+          ordinal: 0,
+          collapsed: true,
+        }];
+      }
       if (speakers.length) {
         return speakers
           .sort((left, right) => Number(left[1]) - Number(right[1]))
-          .map(([speakerName, speakerId]) => ({ speakerName, speakerId: Number(speakerId) }));
+          .map(([speakerName, speakerId], ordinal) => ({ speakerName, speakerId: Number(speakerId), ordinal }));
       }
       return Array.from({ length: speakerCount }, (_value, speakerId) => ({
         speakerName: null,
         speakerId,
+        ordinal: speakerId,
       }));
     }
 
-    function manualVoiceChoiceId(voiceName, speakerName, speakerId) {
-      return JSON.stringify([voiceName, speakerName, speakerId]);
+    function manualVoiceChoiceId(voiceFamilyId, speakerName, speakerId) {
+      return JSON.stringify([voiceFamilyId, speakerName, speakerId]);
+    }
+
+    function humanizeVoiceName(value) {
+      return String(value || "Piper voice")
+        .replace(/[_-]+/g, " ")
+        .replace(/\b\w/g, (letter) => letter.toUpperCase());
+    }
+
+    function voiceChoiceLabel(voice, variant) {
+      const name = voice.display_name || humanizeVoiceName(voice.name);
+      const traits = Array.isArray(voice.display_traits) && voice.display_traits.length
+        ? voice.display_traits
+        : [languageLabel(voice.language), Number(voice.num_speakers) > 1 ? "Multi-speaker" : "Single-speaker"];
+      let speakerLabel = "";
+      if (Number(voice.num_speakers) > 1 && !variant?.collapsed) {
+        const rawSpeaker = variant?.speakerName || "";
+        const opaqueSpeaker = /^(?:p\d+|vivos(?:spk|dev)\d+|[a-z]{1,5}\d+)$/i.test(rawSpeaker);
+        speakerLabel = rawSpeaker && !opaqueSpeaker && !/^\d+$/.test(rawSpeaker)
+          ? humanizeVoiceName(rawSpeaker)
+          : `Speaker ${(variant?.ordinal ?? variant?.speakerId ?? 0) + 1}`;
+      }
+      const displayTraits = variant?.collapsed ? [...traits, "Default speaker"] : traits;
+      return `${name}${speakerLabel ? ` ${speakerLabel}` : ""} (${displayTraits.join(", ")})`;
     }
 
     function manualVoiceChoices() {
       const choices = [];
       const seen = new Set();
-      for (const voice of state.voices.filter((item) => item.language.code === elements.language.value)) {
+      const languageCode = elements.language.value;
+      const eligible = state.voices.filter((item) => languageCode === "auto" || item.language.code === languageCode);
+      for (const voice of eligible) {
         for (const variant of speakerVariants(voice)) {
-          const id = manualVoiceChoiceId(voice.name, variant.speakerName, variant.speakerId);
+          const familyId = voice.voice_family_id || `${voice.language.code}-${voice.name}`;
+          const id = manualVoiceChoiceId(familyId, variant.speakerName, variant.speakerId);
           if (seen.has(id)) continue;
           seen.add(id);
-          const speakerLabel = variant.speakerName || (
-            variant.speakerId === null ? "" : `Speaker ${variant.speakerId}`
-          );
           choices.push({
             id,
+            voiceFamilyId: familyId,
+            languageCode: voice.language.code,
             voiceName: voice.name,
             speakerName: variant.speakerName,
             speakerId: variant.speakerId,
-            label: speakerLabel
-              ? `${voice.name} - ${speakerLabel} (${variant.speakerId})`
-              : voice.name,
+            ordinal: variant.ordinal,
+            label: voiceChoiceLabel(voice, variant),
           });
         }
       }
-      return choices.sort((left, right) => left.label.localeCompare(right.label));
+      return choices.sort((left, right) => naturalCompare(left.label, right.label));
     }
 
     function currentManualChoice() {
@@ -1240,7 +1257,9 @@
     }
 
     function choiceMatchesVoice(choice, voice) {
-      if (!choice || !voice || choice.voiceName !== voice.name) return false;
+      if (!choice || !voice) return false;
+      const familyId = voice.voice_family_id || `${voice.language.code}-${voice.name}`;
+      if (choice.voiceFamilyId !== familyId) return false;
       if ((Number(voice.num_speakers) || 1) <= 1) {
         return choice.speakerName === null && choice.speakerId === null;
       }
@@ -1259,7 +1278,10 @@
         : "Installed voices";
       const voices = state.voices
         .filter((voice) => voice.installed && voice.language.code === languageCode)
-        .sort((left, right) => left.key.localeCompare(right.key));
+        .sort((left, right) => naturalCompare(
+          voiceChoiceLabel(left, speakerVariants(left)[0]),
+          voiceChoiceLabel(right, speakerVariants(right)[0]),
+        ));
       elements.quickVoiceList.replaceChildren();
       if (!voices.length) {
         const empty = document.createElement("p");
@@ -1271,7 +1293,7 @@
         return;
       }
 
-      const selectedKey = state.mode === "manual" ? currentManualVoice()?.key : selectedVoiceForMode()?.key;
+      const selectedKey = resolvedVoice()?.key;
       for (const voice of voices) {
         const option = document.createElement("button");
         option.type = "button";
@@ -1279,7 +1301,7 @@
         option.setAttribute("role", "option");
         option.setAttribute("aria-selected", String(voice.key === selectedKey));
         const name = document.createElement("span");
-        name.textContent = voice.name;
+        name.textContent = voice.display_name || humanizeVoiceName(voice.name);
         const quality = document.createElement("small");
         quality.textContent = voice.quality;
         option.append(name, quality);
@@ -1290,11 +1312,9 @@
 
     function selectQuickVoice(voice) {
       elements.language.value = voice.language.code;
-      updateManualNames({ voiceKey: voice.key }, voice.quality);
-      elements.modeManual.checked = true;
-      elements.modeAuto.checked = false;
-      switchMode("manual");
-      persistManualSelection();
+      updateManualNames({ voiceFamilyId: voice.voice_family_id }, voice.quality);
+      persistSelection();
+      scheduleAnalysis();
       closePlayerPopovers();
       elements.voicePicker.focus();
     }
@@ -1314,95 +1334,130 @@
 
     function currentManualVoice() {
       const choice = currentManualChoice();
-      return state.voices.find((voice) =>
-        voice.language.code === elements.language.value &&
-        voice.quality === elements.quality.value &&
-        choiceMatchesVoice(choice, voice)
-      ) || null;
+      if (!choice) return null;
+      const candidates = state.voices.filter((voice) =>
+        choiceMatchesVoice(choice, voice) &&
+        (elements.quality.value === "auto" || voice.quality === elements.quality.value)
+      );
+      return candidates.sort((left, right) =>
+        Number(right.installed) - Number(left.installed)
+        || (qualityPriority(left.quality) - qualityPriority(right.quality))
+        || left.key.localeCompare(right.key)
+      )[0] || null;
+    }
+
+    function qualityPriority(value) {
+      return ["medium", "high", "low", "x_low"].indexOf(value) < 0
+        ? 99 : ["medium", "high", "low", "x_low"].indexOf(value);
+    }
+
+    function autoCandidateVoice() {
+      const languageCode = elements.language.value;
+      const quality = elements.quality.value;
+      const candidates = state.voices.filter((voice) =>
+        (languageCode === "auto" || voice.language.code === languageCode) &&
+        (quality === "auto" || voice.quality === quality)
+      );
+      return candidates.sort((left, right) =>
+        Number(right.installed) - Number(left.installed)
+        || qualityPriority(left.quality) - qualityPriority(right.quality)
+        || left.key.localeCompare(right.key)
+      )[0] || null;
     }
 
     function updateManualNames(preferred = {}, preferredQuality) {
       state.manualVoiceChoices = manualVoiceChoices();
-      let selected = null;
+      let selected = "auto";
       if (preferred.choiceId && state.manualVoiceChoices.some((choice) => choice.id === preferred.choiceId)) {
         selected = preferred.choiceId;
-      } else if (preferred.voiceKey) {
-        const preferredVoice = state.voices.find((voice) => voice.key === preferred.voiceKey);
-        const preferredChoice = state.manualVoiceChoices.find((choice) =>
-          preferredVoice && choiceMatchesVoice(choice, preferredVoice) &&
-          (preferred.speakerName === undefined || choice.speakerName === preferred.speakerName) &&
-          (preferred.speakerId === undefined || choice.speakerId === preferred.speakerId)
-        );
-        selected = preferredChoice?.id || null;
-      } else if (preferred.voiceName) {
-        selected = state.manualVoiceChoices.find((choice) => choice.voiceName === preferred.voiceName)?.id || null;
+      } else if (preferred.voiceFamilyId || state.settings.selection.voice !== "auto") {
+        const familyId = preferred.voiceFamilyId || state.settings.selection.voice;
+        const speakerName = preferred.speakerName ?? state.settings.selection.speakerName;
+        const speakerId = preferred.speakerId ?? state.settings.selection.speakerId;
+        selected = state.manualVoiceChoices.find((choice) =>
+          choice.voiceFamilyId === familyId &&
+          (speakerName !== null
+            ? choice.speakerName === speakerName
+            : (speakerId === null ? choice.speakerName === null : choice.speakerId === speakerId))
+        )?.id || "auto";
       }
-      selected = selected || state.manualVoiceChoices[0]?.id || "";
       fillSelect(
         elements.name,
-        state.manualVoiceChoices.map((choice) => choice.id),
+        ["auto", ...state.manualVoiceChoices.map((choice) => choice.id)],
         selected,
-        (value) => state.manualVoiceChoices.find((choice) => choice.id === value)?.label || value,
+        (value) => value === "auto"
+          ? "Auto Detect"
+          : state.manualVoiceChoices.find((choice) => choice.id === value)?.label || value,
       );
-      updateManualQualities(preferredQuality);
+      updateManualQualities(preferredQuality === undefined ? state.settings.selection.quality : preferredQuality);
     }
 
     function updateManualQualities(preferred) {
       const choice = currentManualChoice();
       const voices = state.voices.filter((voice) =>
-        voice.language.code === elements.language.value &&
-        choiceMatchesVoice(choice, voice)
+        (elements.language.value === "auto" || voice.language.code === elements.language.value) &&
+        (!choice || choiceMatchesVoice(choice, voice))
       );
-      const priority = ["medium", "high", "low", "x_low"];
       const qualities = unique(voices.map((voice) => voice.quality))
-        .sort((a, b) => priority.indexOf(a) - priority.indexOf(b));
-      const selected = qualities.includes(preferred) ? preferred : qualities[0];
-      fillSelect(elements.quality, qualities, selected, titleCase);
+        .sort((a, b) => qualityPriority(a) - qualityPriority(b) || naturalCompare(a, b));
+      const selected = qualities.includes(preferred) ? preferred : "auto";
+      fillSelect(elements.quality, ["auto", ...qualities], selected, (value) =>
+        value === "auto" ? "Auto Detect" : titleCase(value));
       renderVoiceStatus();
     }
 
+    function migrateLegacySettings() {
+      const legacy = state.settings.legacy;
+      if (!legacy) return;
+      const legacyVoice = state.voices.find((voice) => voice.key === legacy.manualVoiceKey);
+      state.settings = SettingsStore.update((settings) => {
+        if (legacy.mode === "manual" && legacyVoice) {
+          const legacySpeaker = speakerVariants(legacyVoice).find((variant) =>
+            (legacy.speakerName !== null && variant.speakerName === legacy.speakerName)
+            || (legacy.speakerName === null && legacy.speakerId !== null && variant.speakerId === legacy.speakerId)
+          );
+          settings.selection.language = legacyVoice.language.code;
+          settings.selection.voice = legacyVoice.voice_family_id || `${legacyVoice.language.code}-${legacyVoice.name}`;
+          settings.selection.quality = legacyVoice.quality;
+          settings.selection.speakerName = legacySpeaker?.speakerName || null;
+          settings.selection.speakerId = legacySpeaker?.speakerName === null ? legacySpeaker.speakerId : null;
+        } else {
+          settings.selection.language = "auto";
+          settings.selection.voice = "auto";
+          settings.selection.quality = "auto";
+          settings.selection.speakerName = null;
+          settings.selection.speakerId = null;
+        }
+        settings.legacy = null;
+      });
+    }
+
     function populateManualSelectors() {
-      const oldLanguage = elements.language.value;
-      const oldChoice = currentManualChoice();
-      const oldQuality = elements.quality.value;
-      const languages = unique(state.voices.map((voice) => voice.language.code)).sort();
-      const installed = state.voices.find((voice) => voice.installed);
-      const storedVoice = state.voices.find((voice) => voice.key === state.settings.selection.manualVoiceKey);
-      const selected = languages.includes(oldLanguage)
-        ? oldLanguage
-        : (storedVoice?.language.code || installed?.language.code || languages[0]);
-      fillSelect(elements.language, languages, selected, (code) => {
+      migrateLegacySettings();
+      const languages = unique(state.voices.map((voice) => voice.language.code))
+        .sort((left, right) => naturalCompare(
+          languageLabel(state.voices.find((voice) => voice.language.code === left)?.language),
+          languageLabel(state.voices.find((voice) => voice.language.code === right)?.language,
+        )));
+      const selected = languages.includes(state.settings.selection.language)
+        ? state.settings.selection.language : "auto";
+      fillSelect(elements.language, ["auto", ...languages], selected, (code) => {
+        if (code === "auto") return "Auto Detect";
         const voice = state.voices.find((item) => item.language.code === code);
         return languageLabel(voice?.language);
       });
-      state.manualVoiceChoices = manualVoiceChoices();
-      const storedChoice = state.manualVoiceChoices.find((choice) =>
-        storedVoice && choiceMatchesVoice(choice, storedVoice) &&
-        (state.settings.selection.speakerName === null
-          ? choice.speakerName === null
-          : choice.speakerName === state.settings.selection.speakerName) &&
-        (state.settings.selection.speakerId === null
-          ? choice.speakerId === null
-          : choice.speakerId === state.settings.selection.speakerId)
-      );
-      updateManualNames(
-        oldLanguage === selected && oldChoice
-          ? { choiceId: oldChoice.id }
-          : storedChoice
-            ? { choiceId: storedChoice.id }
-            : storedVoice
-              ? { voiceKey: storedVoice.key }
-              : {},
-        oldQuality || storedVoice?.quality,
-      );
+      updateManualNames();
+      persistSelection();
     }
 
-    function selectedVoiceForMode() {
-      return state.mode === "auto" ? state.analysis?.voice || null : currentManualVoice();
+    function resolvedVoice() {
+      const selected = currentManualVoice();
+      if (selected) return selected;
+      return state.analysis?.voice || autoCandidateVoice();
     }
 
     function renderVoiceStatus() {
-      const voice = selectedVoiceForMode();
+      const voice = resolvedVoice();
       if (!voice) {
         elements.selectedVoice.textContent = state.voices.length ? "No matching voice" : "No voices available";
         setHidden(elements.installedBadge, true);
@@ -1412,8 +1467,9 @@
         return;
       }
 
-      const choice = state.mode === "manual" ? currentManualChoice() : null;
-      elements.selectedVoice.textContent = `${choice?.label || voice.name} · ${titleCase(voice.quality)}`;
+      const choice = currentManualChoice();
+      const displayLabel = choice?.label || voiceChoiceLabel(voice, speakerVariants(voice)[0]);
+      elements.selectedVoice.textContent = `${displayLabel} · ${titleCase(voice.quality)}`;
       elements.installedBadge.textContent = voice.installed ? "Installed" : "Download required";
       elements.installedBadge.className = `badge ${voice.installed ? "ready" : "missing"}`;
       setHidden(elements.installedBadge, false);
@@ -1425,12 +1481,8 @@
     }
 
     function updateSpeakState() {
-      const voice = selectedVoiceForMode();
+      const voice = resolvedVoice();
       elements.speak.disabled = state.downloading || !elements.text.value.trim() || !voice?.installed;
-    }
-
-    function analysisEnabledForMode() {
-      return true;
     }
 
     function updateAnalysisPresentation() {
@@ -1440,6 +1492,19 @@
     function renderAnalysis() {
       updateAnalysisPresentation();
       renderVoiceStatus();
+    }
+
+    function currentSelectionPayload() {
+      const choice = currentManualChoice();
+      return {
+        language: elements.language.value || "auto",
+        voice: choice?.voiceFamilyId || "auto",
+        quality: elements.quality.value || "auto",
+        speaker: choice && (choice.speakerName !== null || choice.speakerId !== null)
+          ? { name: choice.speakerName, id: choice.speakerId }
+          : null,
+        emotion: elements.manualEmotion.value || "auto",
+      };
     }
 
     async function loadCatalog() {
@@ -1469,18 +1534,7 @@
     async function analyzeText() {
       const text = elements.text.value.trim();
       const sequence = ++state.analyzeSequence;
-      if (!analysisEnabledForMode()) {
-        state.analysis = null;
-        renderAnalysis();
-        return;
-      }
       if (!text) {
-        state.analysis = null;
-        renderAnalysis();
-        return;
-      }
-      const voice = currentManualVoice();
-      if (state.mode === "manual" && !voice) {
         state.analysis = null;
         renderAnalysis();
         return;
@@ -1491,9 +1545,7 @@
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             text,
-            mode: state.mode,
-            voice: state.mode === "manual" ? voice.key : undefined,
-            emotion: state.mode === "manual" ? elements.manualEmotion.value : undefined,
+            selection: currentSelectionPayload(),
             delivery: effectiveDeliverySettings().mode,
             voice_speed: synthesisVoiceSpeed(),
           }),
@@ -1514,7 +1566,7 @@
     }
 
     async function downloadSelectedVoice() {
-      const voice = selectedVoiceForMode();
+      const voice = resolvedVoice();
       if (!voice || voice.installed || state.downloading) return;
       state.downloading = true;
       showError();
@@ -1573,25 +1625,15 @@
 
     async function speak() {
       const text = elements.text.value.trim();
-      const voice = selectedVoiceForMode();
+      const voice = resolvedVoice();
       if (!text || !voice?.installed) return;
 
       const payload = {
         text,
-        mode: state.mode,
+        selection: currentSelectionPayload(),
         delivery: effectiveDeliverySettings().mode,
         voice_speed: synthesisVoiceSpeed(),
       };
-      if (state.mode === "manual") {
-        const choice = currentManualChoice();
-        payload.voice = voice.key;
-        payload.emotion = elements.manualEmotion.value;
-        if (choice?.speakerName !== null && choice?.speakerName !== undefined) {
-          payload.speaker = choice.speakerName;
-        } else if (choice?.speakerId !== null && choice?.speakerId !== undefined) {
-          payload.speaker_id = choice.speakerId;
-        }
-      }
 
       elements.speak.disabled = true;
       elements.speak.textContent = "Synthesizing…";
@@ -1627,19 +1669,6 @@
       }
     }
 
-    function switchMode(mode, persist = true) {
-      state.mode = mode;
-      setHidden(elements.manualPanel, mode !== "manual");
-      updateAnalysisPresentation();
-      showError();
-      if (persist) {
-        state.settings = SettingsStore.update((settings) => { settings.selection.mode = mode; });
-        renderStorageWarning();
-      }
-      if (elements.text.value.trim()) analyzeText();
-      else renderVoiceStatus();
-    }
-
     function applyStoredSettings(settings) {
       state.settings = settings;
       state.lastAudibleVolume = settings.player.lastAudibleVolume;
@@ -1651,21 +1680,14 @@
       elements.audio.volume = settings.player.volume;
       elements.audio.muted = settings.player.muted;
       setPlaybackRate(settings.player.playbackRate, false);
-      elements.modeAuto.checked = settings.selection.mode === "auto";
-      elements.modeManual.checked = settings.selection.mode === "manual";
       if (state.voices.length) {
-        elements.language.value = "";
-        elements.name.value = "";
-        elements.quality.value = "";
         populateManualSelectors();
       }
-      switchMode(settings.selection.mode, false);
+      updateAnalysisPresentation();
       syncVolumeState();
       renderStorageWarning();
     }
 
-    elements.modeAuto.addEventListener("change", () => switchMode("auto"));
-    elements.modeManual.addEventListener("change", () => switchMode("manual"));
     elements.text.addEventListener("input", () => {
       scheduleAnalysis();
       clearTimeout(state.draftTimer);
@@ -1675,9 +1697,26 @@
       }, 300);
       updateSpeakState();
     });
-    elements.language.addEventListener("change", () => { updateManualNames(); persistManualSelection(); scheduleAnalysis(); });
-    elements.name.addEventListener("change", () => { updateManualQualities(); persistManualSelection(); scheduleAnalysis(); });
-    elements.quality.addEventListener("change", () => { persistManualSelection(); renderVoiceStatus(); scheduleAnalysis(); });
+    elements.language.addEventListener("change", () => {
+      state.analysis = null;
+      updateManualNames();
+      persistSelection();
+      scheduleAnalysis();
+    });
+    elements.name.addEventListener("change", () => {
+      const choice = currentManualChoice();
+      if (choice && elements.language.value === "auto") elements.language.value = choice.languageCode;
+      updateManualQualities(elements.quality.value);
+      state.analysis = null;
+      persistSelection();
+      scheduleAnalysis();
+    });
+    elements.quality.addEventListener("change", () => {
+      state.analysis = null;
+      persistSelection();
+      renderVoiceStatus();
+      scheduleAnalysis();
+    });
     elements.manualEmotion.addEventListener("change", () => { persistManualEmotion(); scheduleAnalysis(); });
     elements.deliveryMode.addEventListener("change", () => {
       persistDeliverySettings();

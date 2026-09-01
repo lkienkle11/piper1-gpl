@@ -1,15 +1,23 @@
 """Tests for automatic text analysis and HTTP voice selection."""
 
+import json
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, Dict, Iterable
 
 import pytest
 
 from piper.http_server import create_app
+from piper.voice_metadata import (
+    VOICE_DISPLAY_METADATA,
+    metadata_missing_for_catalog,
+    voice_display_label,
+)
 from piper.voice_selection import (
     InvalidScriptError,
     TextAnalyzer,
     classify_text,
+    normalize_selection,
     normalize_voice_catalog,
     parse_script,
     prosody_for,
@@ -36,6 +44,10 @@ def _catalog_voice(
             "country_english": "",
         },
         "name": name,
+        "voice_family_id": f"{code}-{name}",
+        "display_name": name.title(),
+        "display_traits": [family, "Single-speaker"],
+        "speaker_label": "Speaker {ordinal}",
         "quality": quality,
         "num_speakers": 1,
         "speakers": {},
@@ -157,6 +169,10 @@ def test_normalize_preserves_language_metadata_and_speaker_mapping() -> None:
                 "country_english": "Great Britain",
             },
             "name": "aru",
+            "voice_family_id": "en_GB-aru",
+            "display_name": "Aru",
+            "display_traits": ["English", "Great Britain", "Multi-speaker"],
+            "speaker_label": "Speaker {ordinal}",
             "quality": "medium",
             "num_speakers": 2,
             "speakers": {"03": 0, "06": 1},
@@ -164,6 +180,49 @@ def test_normalize_preserves_language_metadata_and_speaker_mapping() -> None:
             "installed": False,
         }
     ]
+
+
+def test_voice_display_metadata_covers_catalog_snapshot() -> None:
+    snapshot_path = Path(__file__).with_name("voice_catalog_snapshot.json")
+    snapshot = json.loads(snapshot_path.read_text(encoding="utf-8"))
+    catalog = {entry["key"]: entry for entry in snapshot}
+    assert len(VOICE_DISPLAY_METADATA) == 153
+    assert metadata_missing_for_catalog(catalog) == []
+
+    for entry in snapshot:
+        voice = dict(entry)
+        labels = {
+            voice_display_label(
+                voice, speaker_id=speaker_id, speaker_ordinal=speaker_id
+            )
+            for speaker_id in range(int(entry["num_speakers"]))
+        }
+        assert len(labels) == int(entry["num_speakers"])
+        assert all("(" in label and ")" in label for label in labels)
+
+
+def test_selection_normalization_and_neutral_unknown_voice_labels() -> None:
+    selection = normalize_selection(
+        {
+            "language": "en_US",
+            "voice": "en_US-unknown",
+            "quality": "medium",
+            "speaker": {"id": 2},
+            "emotion": "happy",
+        }
+    )
+    assert selection["voice"] == "en_US-unknown"
+    assert selection["speaker"]["id"] == 2
+
+    voice = _catalog_voice(
+        "xx_XX-corpus-medium", "xx", "xx_XX", "corpus", "medium", True
+    )
+    voice["num_speakers"] = 2
+    label = voice_display_label(voice, speaker_id=0, speaker_ordinal=0)
+    assert label == "Corpus Speaker 1 (xx, Multi-speaker)"
+    assert "0" not in label
+
+
 def test_resolver_prefers_configured_british_voice_before_installed_us() -> None:
     voices = [
         _catalog_voice("en_US-lessac-medium", "en", "en_US", "lessac", "medium", True),
@@ -174,6 +233,64 @@ def test_resolver_prefers_configured_british_voice_before_installed_us() -> None
     assert selected is not None
     assert selected["key"] == "en_GB-cori-high"
     assert selected["installed"] is False
+
+
+def test_resolver_applies_language_voice_and_quality_constraints_independently() -> (
+    None
+):
+    voices = [
+        _catalog_voice("en_US-lessac-medium", "en", "en_US", "lessac", "medium", True),
+        _catalog_voice("en_US-lessac-high", "en", "en_US", "lessac", "high", True),
+        _catalog_voice("en_GB-cori-high", "en", "en_GB", "cori", "high", True),
+    ]
+    selected = resolve_voice(
+        "en",
+        voices,
+        "en_US-lessac-medium",
+        language_code="en_US",
+        quality="high",
+    )
+    assert selected is not None
+    assert selected["key"] == "en_US-lessac-high"
+
+    result = TextAnalyzer().analyze(
+        "Hello there.",
+        voices,
+        "en_US-lessac-medium",
+        language_code="en_US",
+        voice_family_id="en_US-lessac",
+        quality="high",
+    )
+    assert result["voice"]["key"] == "en_US-lessac-high"
+
+
+def test_normalize_selection_rejects_invalid_values() -> None:
+    with pytest.raises(ValueError, match="selection.quality"):
+        normalize_selection({"quality": "ultra"})
+    with pytest.raises(ValueError, match="selection.speaker.id"):
+        normalize_selection({"speaker": {"id": -1}})
+
+
+def test_analyzer_rejects_incompatible_explicit_dimensions() -> None:
+    voices = [
+        _catalog_voice("en_US-lessac-medium", "en", "en_US", "lessac", "medium", True)
+    ]
+    with pytest.raises(ValueError, match="not available for language"):
+        TextAnalyzer().analyze(
+            "Hello there.",
+            voices,
+            "en_US-lessac-medium",
+            language_code="vi_VN",
+            voice_family_id="en_US-lessac",
+        )
+    with pytest.raises(ValueError, match="at quality high"):
+        TextAnalyzer().analyze(
+            "Hello there.",
+            voices,
+            "en_US-lessac-medium",
+            language_code="en_US",
+            quality="high",
+        )
 
 
 def test_parse_script_directions_and_validation() -> None:
@@ -470,6 +587,29 @@ def test_http_catalog_analyze_and_synthesis_modes(http_client: Any) -> None:
     )
     assert missing_response.status_code == 409
     assert missing_response.get_json()["error"] == "voice_not_installed"
+
+
+def test_http_unified_selection_keeps_explicit_dimensions(http_client: Any) -> None:
+    selection = {
+        "language": "en_US",
+        "voice": "auto",
+        "quality": "medium",
+        "speaker": None,
+        "emotion": "happy",
+    }
+    analysis_response = http_client.post(
+        "/analyze", json={"text": "Hello there", "selection": selection}
+    )
+    assert analysis_response.status_code == 200
+    analysis = analysis_response.get_json()
+    assert analysis["language"]["code"] == "en_US"
+    assert analysis["voice"]["key"] == "en_US-lessac-medium"
+
+    synthesis_response = http_client.post(
+        "/synthesize", json={"text": "Hello", "selection": selection}
+    )
+    assert synthesis_response.status_code == 200
+    assert http_client.get("/info").get_json()["last"]["mode"] == "unified"
 
 
 def test_http_manual_emotion_and_validation(

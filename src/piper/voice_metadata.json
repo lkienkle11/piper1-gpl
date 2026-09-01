@@ -1,0 +1,1382 @@
+{
+  "version": 1,
+  "voices": {
+    "ar_JO-kareem": {
+      "display_name": "kareem",
+      "speaker_label": "",
+      "traits": [
+        "Arabic",
+        "Jordan",
+        "Single-speaker"
+      ]
+    },
+    "bg_BG-dimitar": {
+      "display_name": "dimitar",
+      "speaker_label": "",
+      "traits": [
+        "Bulgarian",
+        "Bulgaria",
+        "Single-speaker"
+      ]
+    },
+    "bn_BD-google": {
+      "display_name": "google",
+      "speaker_label": "Speaker {ordinal}",
+      "traits": [
+        "Bengali",
+        "Bangladesh",
+        "Multi-speaker"
+      ]
+    },
+    "ca_ES-upc_ona": {
+      "display_name": "upc_ona",
+      "speaker_label": "",
+      "traits": [
+        "Catalan",
+        "Spain",
+        "Single-speaker"
+      ]
+    },
+    "ca_ES-upc_pau": {
+      "display_name": "upc_pau",
+      "speaker_label": "",
+      "traits": [
+        "Catalan",
+        "Spain",
+        "Single-speaker"
+      ]
+    },
+    "cs_CZ-jirka": {
+      "display_name": "jirka",
+      "speaker_label": "",
+      "traits": [
+        "Czech",
+        "Czech Republic",
+        "Single-speaker"
+      ]
+    },
+    "cs_CZ-kasandra": {
+      "display_name": "kasandra",
+      "speaker_label": "",
+      "traits": [
+        "Czech",
+        "Czech Republic",
+        "Single-speaker"
+      ]
+    },
+    "cy_GB-bu_tts": {
+      "display_name": "bu_tts",
+      "speaker_label": "Speaker {ordinal}",
+      "traits": [
+        "Welsh",
+        "Great Britain",
+        "Multi-speaker"
+      ]
+    },
+    "cy_GB-gwryw_gogleddol": {
+      "display_name": "gwryw_gogleddol",
+      "speaker_label": "",
+      "traits": [
+        "Welsh",
+        "Great Britain",
+        "Single-speaker"
+      ]
+    },
+    "da_DK-talesyntese": {
+      "display_name": "talesyntese",
+      "speaker_label": "",
+      "traits": [
+        "Danish",
+        "Denmark",
+        "Single-speaker"
+      ]
+    },
+    "de_DE-eva_k": {
+      "display_name": "eva_k",
+      "speaker_label": "",
+      "traits": [
+        "German",
+        "Germany",
+        "Single-speaker"
+      ]
+    },
+    "de_DE-karlsson": {
+      "display_name": "karlsson",
+      "speaker_label": "",
+      "traits": [
+        "German",
+        "Germany",
+        "Single-speaker"
+      ]
+    },
+    "de_DE-kerstin": {
+      "display_name": "kerstin",
+      "speaker_label": "",
+      "traits": [
+        "German",
+        "Germany",
+        "Single-speaker"
+      ]
+    },
+    "de_DE-mls": {
+      "display_name": "mls",
+      "speaker_label": "Speaker {ordinal}",
+      "traits": [
+        "German",
+        "Germany",
+        "Multi-speaker"
+      ]
+    },
+    "de_DE-pavoque": {
+      "display_name": "pavoque",
+      "speaker_label": "",
+      "traits": [
+        "German",
+        "Germany",
+        "Single-speaker"
+      ]
+    },
+    "de_DE-ramona": {
+      "display_name": "ramona",
+      "speaker_label": "",
+      "traits": [
+        "German",
+        "Germany",
+        "Single-speaker"
+      ]
+    },
+    "de_DE-thorsten": {
+      "display_name": "thorsten",
+      "speaker_label": "",
+      "traits": [
+        "German",
+        "Germany",
+        "Single-speaker"
+      ]
+    },
+    "de_DE-thorsten_emotional": {
+      "display_name": "thorsten_emotional",
+      "speaker_label": "Speaker {ordinal}",
+      "traits": [
+        "German",
+        "Germany",
+        "Multi-speaker"
+      ]
+    },
+    "el_GR-joy": {
+      "display_name": "joy",
+      "speaker_label": "",
+      "traits": [
+        "Greek",
+        "Greece",
+        "Single-speaker"
+      ]
+    },
+    "el_GR-rapunzelina": {
+      "display_name": "rapunzelina",
+      "speaker_label": "",
+      "traits": [
+        "Greek",
+        "Greece",
+        "Single-speaker"
+      ]
+    },
+    "en_GB-alan": {
+      "display_name": "alan",
+      "speaker_label": "",
+      "traits": [
+        "English",
+        "Great Britain",
+        "Single-speaker"
+      ]
+    },
+    "en_GB-alba": {
+      "display_name": "alba",
+      "speaker_label": "",
+      "traits": [
+        "English",
+        "Great Britain",
+        "Single-speaker"
+      ]
+    },
+    "en_GB-aru": {
+      "display_name": "aru",
+      "speaker_label": "Speaker {ordinal}",
+      "traits": [
+        "English",
+        "Great Britain",
+        "Multi-speaker"
+      ]
+    },
+    "en_GB-cori": {
+      "display_name": "cori",
+      "speaker_label": "",
+      "traits": [
+        "English",
+        "Great Britain",
+        "Single-speaker"
+      ]
+    },
+    "en_GB-jenny_dioco": {
+      "display_name": "jenny_dioco",
+      "speaker_label": "",
+      "traits": [
+        "English",
+        "Great Britain",
+        "Single-speaker"
+      ]
+    },
+    "en_GB-northern_english_male": {
+      "display_name": "northern_english_male",
+      "speaker_label": "",
+      "traits": [
+        "English",
+        "Great Britain",
+        "Single-speaker"
+      ]
+    },
+    "en_GB-semaine": {
+      "display_name": "semaine",
+      "speaker_label": "Speaker {ordinal}",
+      "traits": [
+        "English",
+        "Great Britain",
+        "Multi-speaker"
+      ]
+    },
+    "en_GB-southern_english_female": {
+      "display_name": "southern_english_female",
+      "speaker_label": "",
+      "traits": [
+        "English",
+        "Great Britain",
+        "Single-speaker"
+      ]
+    },
+    "en_GB-vctk": {
+      "display_name": "vctk",
+      "speaker_label": "Speaker {ordinal}",
+      "traits": [
+        "English",
+        "Great Britain",
+        "Multi-speaker"
+      ]
+    },
+    "en_US-amy": {
+      "display_name": "amy",
+      "speaker_label": "",
+      "traits": [
+        "English",
+        "United States",
+        "Single-speaker"
+      ]
+    },
+    "en_US-arctic": {
+      "display_name": "arctic",
+      "speaker_label": "Speaker {ordinal}",
+      "traits": [
+        "English",
+        "United States",
+        "Multi-speaker"
+      ]
+    },
+    "en_US-bryce": {
+      "display_name": "bryce",
+      "speaker_label": "",
+      "traits": [
+        "English",
+        "United States",
+        "Single-speaker"
+      ]
+    },
+    "en_US-danny": {
+      "display_name": "danny",
+      "speaker_label": "",
+      "traits": [
+        "English",
+        "United States",
+        "Single-speaker"
+      ]
+    },
+    "en_US-hfc_female": {
+      "display_name": "hfc_female",
+      "speaker_label": "",
+      "traits": [
+        "English",
+        "United States",
+        "Single-speaker"
+      ]
+    },
+    "en_US-hfc_male": {
+      "display_name": "hfc_male",
+      "speaker_label": "",
+      "traits": [
+        "English",
+        "United States",
+        "Single-speaker"
+      ]
+    },
+    "en_US-joe": {
+      "display_name": "joe",
+      "speaker_label": "",
+      "traits": [
+        "English",
+        "United States",
+        "Single-speaker"
+      ]
+    },
+    "en_US-john": {
+      "display_name": "john",
+      "speaker_label": "",
+      "traits": [
+        "English",
+        "United States",
+        "Single-speaker"
+      ]
+    },
+    "en_US-kathleen": {
+      "display_name": "kathleen",
+      "speaker_label": "",
+      "traits": [
+        "English",
+        "United States",
+        "Single-speaker"
+      ]
+    },
+    "en_US-kristin": {
+      "display_name": "kristin",
+      "speaker_label": "",
+      "traits": [
+        "English",
+        "United States",
+        "Single-speaker"
+      ]
+    },
+    "en_US-kusal": {
+      "display_name": "kusal",
+      "speaker_label": "",
+      "traits": [
+        "English",
+        "United States",
+        "Single-speaker"
+      ]
+    },
+    "en_US-l2arctic": {
+      "display_name": "l2arctic",
+      "speaker_label": "Speaker {ordinal}",
+      "traits": [
+        "English",
+        "United States",
+        "Multi-speaker"
+      ]
+    },
+    "en_US-lessac": {
+      "display_name": "lessac",
+      "speaker_label": "",
+      "traits": [
+        "English",
+        "United States",
+        "Single-speaker"
+      ]
+    },
+    "en_US-libritts": {
+      "display_name": "libritts",
+      "speaker_label": "Speaker {ordinal}",
+      "traits": [
+        "English",
+        "United States",
+        "Multi-speaker"
+      ]
+    },
+    "en_US-libritts_r": {
+      "display_name": "libritts_r",
+      "speaker_label": "Speaker {ordinal}",
+      "traits": [
+        "English",
+        "United States",
+        "Multi-speaker"
+      ]
+    },
+    "en_US-ljspeech": {
+      "display_name": "ljspeech",
+      "speaker_label": "",
+      "traits": [
+        "English",
+        "United States",
+        "Single-speaker"
+      ]
+    },
+    "en_US-mike": {
+      "display_name": "mike",
+      "speaker_label": "",
+      "traits": [
+        "English",
+        "United States",
+        "Single-speaker"
+      ]
+    },
+    "en_US-norman": {
+      "display_name": "norman",
+      "speaker_label": "",
+      "traits": [
+        "English",
+        "United States",
+        "Single-speaker"
+      ]
+    },
+    "en_US-reza_ibrahim": {
+      "display_name": "reza_ibrahim",
+      "speaker_label": "",
+      "traits": [
+        "English",
+        "United States",
+        "Single-speaker"
+      ]
+    },
+    "en_US-ryan": {
+      "display_name": "ryan",
+      "speaker_label": "",
+      "traits": [
+        "English",
+        "United States",
+        "Single-speaker"
+      ]
+    },
+    "en_US-sam": {
+      "display_name": "sam",
+      "speaker_label": "",
+      "traits": [
+        "English",
+        "United States",
+        "Single-speaker"
+      ]
+    },
+    "es_AR-daniela": {
+      "display_name": "daniela",
+      "speaker_label": "",
+      "traits": [
+        "Spanish",
+        "Argentina",
+        "Single-speaker"
+      ]
+    },
+    "es_ES-carlfm": {
+      "display_name": "carlfm",
+      "speaker_label": "",
+      "traits": [
+        "Spanish",
+        "Spain",
+        "Single-speaker"
+      ]
+    },
+    "es_ES-davefx": {
+      "display_name": "davefx",
+      "speaker_label": "",
+      "traits": [
+        "Spanish",
+        "Spain",
+        "Single-speaker"
+      ]
+    },
+    "es_ES-mls_10246": {
+      "display_name": "mls_10246",
+      "speaker_label": "",
+      "traits": [
+        "Spanish",
+        "Spain",
+        "Single-speaker"
+      ]
+    },
+    "es_ES-mls_9972": {
+      "display_name": "mls_9972",
+      "speaker_label": "",
+      "traits": [
+        "Spanish",
+        "Spain",
+        "Single-speaker"
+      ]
+    },
+    "es_ES-sharvard": {
+      "display_name": "sharvard",
+      "speaker_label": "Speaker {ordinal}",
+      "traits": [
+        "Spanish",
+        "Spain",
+        "Multi-speaker"
+      ]
+    },
+    "es_MX-ald": {
+      "display_name": "ald",
+      "speaker_label": "",
+      "traits": [
+        "Spanish",
+        "Mexico",
+        "Single-speaker"
+      ]
+    },
+    "es_MX-claude": {
+      "display_name": "claude",
+      "speaker_label": "",
+      "traits": [
+        "Spanish",
+        "Mexico",
+        "Single-speaker"
+      ]
+    },
+    "et_EE-news": {
+      "display_name": "news",
+      "speaker_label": "Speaker {ordinal}",
+      "traits": [
+        "Estonian",
+        "Estonia",
+        "Multi-speaker"
+      ]
+    },
+    "eu_ES-antton": {
+      "display_name": "antton",
+      "speaker_label": "",
+      "traits": [
+        "Basque",
+        "Spain",
+        "Single-speaker"
+      ]
+    },
+    "eu_ES-maider": {
+      "display_name": "maider",
+      "speaker_label": "",
+      "traits": [
+        "Basque",
+        "Spain",
+        "Single-speaker"
+      ]
+    },
+    "fa_IR-amir": {
+      "display_name": "amir",
+      "speaker_label": "",
+      "traits": [
+        "Farsi",
+        "Iran",
+        "Single-speaker"
+      ]
+    },
+    "fa_IR-ganji": {
+      "display_name": "ganji",
+      "speaker_label": "",
+      "traits": [
+        "Farsi",
+        "Iran",
+        "Single-speaker"
+      ]
+    },
+    "fa_IR-ganji_adabi": {
+      "display_name": "ganji_adabi",
+      "speaker_label": "",
+      "traits": [
+        "Farsi",
+        "Iran",
+        "Single-speaker"
+      ]
+    },
+    "fa_IR-gyro": {
+      "display_name": "gyro",
+      "speaker_label": "",
+      "traits": [
+        "Farsi",
+        "Iran",
+        "Single-speaker"
+      ]
+    },
+    "fa_IR-reza_ibrahim": {
+      "display_name": "reza_ibrahim",
+      "speaker_label": "",
+      "traits": [
+        "Farsi",
+        "Iran",
+        "Single-speaker"
+      ]
+    },
+    "fi_FI-harri": {
+      "display_name": "harri",
+      "speaker_label": "",
+      "traits": [
+        "Finnish",
+        "Finland",
+        "Single-speaker"
+      ]
+    },
+    "fr_FR-gilles": {
+      "display_name": "gilles",
+      "speaker_label": "",
+      "traits": [
+        "French",
+        "France",
+        "Single-speaker"
+      ]
+    },
+    "fr_FR-mls": {
+      "display_name": "mls",
+      "speaker_label": "Speaker {ordinal}",
+      "traits": [
+        "French",
+        "France",
+        "Multi-speaker"
+      ]
+    },
+    "fr_FR-mls_1840": {
+      "display_name": "mls_1840",
+      "speaker_label": "",
+      "traits": [
+        "French",
+        "France",
+        "Single-speaker"
+      ]
+    },
+    "fr_FR-siwis": {
+      "display_name": "siwis",
+      "speaker_label": "",
+      "traits": [
+        "French",
+        "France",
+        "Single-speaker"
+      ]
+    },
+    "fr_FR-tom": {
+      "display_name": "tom",
+      "speaker_label": "",
+      "traits": [
+        "French",
+        "France",
+        "Single-speaker"
+      ]
+    },
+    "fr_FR-upmc": {
+      "display_name": "upmc",
+      "speaker_label": "Speaker {ordinal}",
+      "traits": [
+        "French",
+        "France",
+        "Multi-speaker"
+      ]
+    },
+    "he_IL-saspeech": {
+      "display_name": "saspeech",
+      "speaker_label": "",
+      "traits": [
+        "Hebrew",
+        "Israel",
+        "Single-speaker"
+      ]
+    },
+    "hi_IN-pratham": {
+      "display_name": "pratham",
+      "speaker_label": "",
+      "traits": [
+        "Hindi",
+        "India",
+        "Single-speaker"
+      ]
+    },
+    "hi_IN-priyamvada": {
+      "display_name": "priyamvada",
+      "speaker_label": "",
+      "traits": [
+        "Hindi",
+        "India",
+        "Single-speaker"
+      ]
+    },
+    "hi_IN-rohan": {
+      "display_name": "rohan",
+      "speaker_label": "",
+      "traits": [
+        "Hindi",
+        "India",
+        "Single-speaker"
+      ]
+    },
+    "hu_HU-anna": {
+      "display_name": "anna",
+      "speaker_label": "",
+      "traits": [
+        "Hungarian",
+        "Hungary",
+        "Single-speaker"
+      ]
+    },
+    "hu_HU-berta": {
+      "display_name": "berta",
+      "speaker_label": "",
+      "traits": [
+        "Hungarian",
+        "Hungary",
+        "Single-speaker"
+      ]
+    },
+    "hu_HU-imre": {
+      "display_name": "imre",
+      "speaker_label": "",
+      "traits": [
+        "Hungarian",
+        "Hungary",
+        "Single-speaker"
+      ]
+    },
+    "hy_AM-gor": {
+      "display_name": "gor",
+      "speaker_label": "",
+      "traits": [
+        "Armenian",
+        "Armenia",
+        "Single-speaker"
+      ]
+    },
+    "id_ID-news_tts": {
+      "display_name": "news_tts",
+      "speaker_label": "",
+      "traits": [
+        "Indonesian",
+        "Indonesia",
+        "Single-speaker"
+      ]
+    },
+    "is_IS-bui": {
+      "display_name": "bui",
+      "speaker_label": "",
+      "traits": [
+        "Icelandic",
+        "Iceland",
+        "Single-speaker"
+      ]
+    },
+    "is_IS-salka": {
+      "display_name": "salka",
+      "speaker_label": "",
+      "traits": [
+        "Icelandic",
+        "Iceland",
+        "Single-speaker"
+      ]
+    },
+    "is_IS-steinn": {
+      "display_name": "steinn",
+      "speaker_label": "",
+      "traits": [
+        "Icelandic",
+        "Iceland",
+        "Single-speaker"
+      ]
+    },
+    "is_IS-ugla": {
+      "display_name": "ugla",
+      "speaker_label": "",
+      "traits": [
+        "Icelandic",
+        "Iceland",
+        "Single-speaker"
+      ]
+    },
+    "it_IT-paola": {
+      "display_name": "paola",
+      "speaker_label": "",
+      "traits": [
+        "Italian",
+        "Italy",
+        "Single-speaker"
+      ]
+    },
+    "it_IT-riccardo": {
+      "display_name": "riccardo",
+      "speaker_label": "",
+      "traits": [
+        "Italian",
+        "Italy",
+        "Single-speaker"
+      ]
+    },
+    "it_IT-serena": {
+      "display_name": "serena",
+      "speaker_label": "",
+      "traits": [
+        "Italian",
+        "Italy",
+        "Single-speaker"
+      ]
+    },
+    "ja_JA-hi_fi_captain": {
+      "display_name": "hi_fi_captain",
+      "speaker_label": "Speaker {ordinal}",
+      "traits": [
+        "Japanese",
+        "Japan",
+        "Multi-speaker"
+      ]
+    },
+    "ka_GE-natia": {
+      "display_name": "natia",
+      "speaker_label": "",
+      "traits": [
+        "Georgian",
+        "Georgia",
+        "Single-speaker"
+      ]
+    },
+    "kk_KZ-iseke": {
+      "display_name": "iseke",
+      "speaker_label": "",
+      "traits": [
+        "Kazakh",
+        "Kazakhstan",
+        "Single-speaker"
+      ]
+    },
+    "kk_KZ-issai": {
+      "display_name": "issai",
+      "speaker_label": "Speaker {ordinal}",
+      "traits": [
+        "Kazakh",
+        "Kazakhstan",
+        "Multi-speaker"
+      ]
+    },
+    "kk_KZ-raya": {
+      "display_name": "raya",
+      "speaker_label": "",
+      "traits": [
+        "Kazakh",
+        "Kazakhstan",
+        "Single-speaker"
+      ]
+    },
+    "ko_KR-kss": {
+      "display_name": "kss",
+      "speaker_label": "",
+      "traits": [
+        "Korean",
+        "South Korea",
+        "Single-speaker"
+      ]
+    },
+    "ku_TR-berfin_renas": {
+      "display_name": "berfin_renas",
+      "speaker_label": "Speaker {ordinal}",
+      "traits": [
+        "Kurmanji Kurdish",
+        "Turkey",
+        "Multi-speaker"
+      ]
+    },
+    "lb_LU-marylux": {
+      "display_name": "marylux",
+      "speaker_label": "",
+      "traits": [
+        "Luxembourgish",
+        "Luxembourg",
+        "Single-speaker"
+      ]
+    },
+    "lv_LV-aivars": {
+      "display_name": "aivars",
+      "speaker_label": "",
+      "traits": [
+        "Latvian",
+        "Latvia",
+        "Single-speaker"
+      ]
+    },
+    "ml_IN-arjun": {
+      "display_name": "arjun",
+      "speaker_label": "",
+      "traits": [
+        "Malayalam",
+        "India",
+        "Single-speaker"
+      ]
+    },
+    "ml_IN-meera": {
+      "display_name": "meera",
+      "speaker_label": "",
+      "traits": [
+        "Malayalam",
+        "India",
+        "Single-speaker"
+      ]
+    },
+    "mr_IN-google": {
+      "display_name": "google",
+      "speaker_label": "Speaker {ordinal}",
+      "traits": [
+        "Marathi",
+        "India",
+        "Multi-speaker"
+      ]
+    },
+    "ne_NP-chitwan": {
+      "display_name": "chitwan",
+      "speaker_label": "",
+      "traits": [
+        "Nepali",
+        "Nepal",
+        "Single-speaker"
+      ]
+    },
+    "ne_NP-google": {
+      "display_name": "google",
+      "speaker_label": "Speaker {ordinal}",
+      "traits": [
+        "Nepali",
+        "Nepal",
+        "Multi-speaker"
+      ]
+    },
+    "nl_BE-nathalie": {
+      "display_name": "nathalie",
+      "speaker_label": "",
+      "traits": [
+        "Dutch",
+        "Belgium",
+        "Single-speaker"
+      ]
+    },
+    "nl_BE-rdh": {
+      "display_name": "rdh",
+      "speaker_label": "",
+      "traits": [
+        "Dutch",
+        "Belgium",
+        "Single-speaker"
+      ]
+    },
+    "nl_NL-alex": {
+      "display_name": "alex",
+      "speaker_label": "",
+      "traits": [
+        "Dutch",
+        "Netherlands",
+        "Single-speaker"
+      ]
+    },
+    "nl_NL-mls": {
+      "display_name": "mls",
+      "speaker_label": "Speaker {ordinal}",
+      "traits": [
+        "Dutch",
+        "Netherlands",
+        "Multi-speaker"
+      ]
+    },
+    "nl_NL-mls_5809": {
+      "display_name": "mls_5809",
+      "speaker_label": "",
+      "traits": [
+        "Dutch",
+        "Netherlands",
+        "Single-speaker"
+      ]
+    },
+    "nl_NL-mls_7432": {
+      "display_name": "mls_7432",
+      "speaker_label": "",
+      "traits": [
+        "Dutch",
+        "Netherlands",
+        "Single-speaker"
+      ]
+    },
+    "nl_NL-pim": {
+      "display_name": "pim",
+      "speaker_label": "",
+      "traits": [
+        "Dutch",
+        "Netherlands",
+        "Single-speaker"
+      ]
+    },
+    "nl_NL-ronnie": {
+      "display_name": "ronnie",
+      "speaker_label": "",
+      "traits": [
+        "Dutch",
+        "Netherlands",
+        "Single-speaker"
+      ]
+    },
+    "no_NO-nvcc": {
+      "display_name": "nvcc",
+      "speaker_label": "Speaker {ordinal}",
+      "traits": [
+        "Norwegian",
+        "Norway",
+        "Multi-speaker"
+      ]
+    },
+    "no_NO-talesyntese": {
+      "display_name": "talesyntese",
+      "speaker_label": "",
+      "traits": [
+        "Norwegian",
+        "Norway",
+        "Single-speaker"
+      ]
+    },
+    "pl_PL-bass": {
+      "display_name": "bass",
+      "speaker_label": "",
+      "traits": [
+        "Polish",
+        "Poland",
+        "Single-speaker"
+      ]
+    },
+    "pl_PL-darkman": {
+      "display_name": "darkman",
+      "speaker_label": "",
+      "traits": [
+        "Polish",
+        "Poland",
+        "Single-speaker"
+      ]
+    },
+    "pl_PL-gosia": {
+      "display_name": "gosia",
+      "speaker_label": "",
+      "traits": [
+        "Polish",
+        "Poland",
+        "Single-speaker"
+      ]
+    },
+    "pl_PL-mc_speech": {
+      "display_name": "mc_speech",
+      "speaker_label": "",
+      "traits": [
+        "Polish",
+        "Poland",
+        "Single-speaker"
+      ]
+    },
+    "pl_PL-mls_6892": {
+      "display_name": "mls_6892",
+      "speaker_label": "",
+      "traits": [
+        "Polish",
+        "Poland",
+        "Single-speaker"
+      ]
+    },
+    "pt_BR-cadu": {
+      "display_name": "cadu",
+      "speaker_label": "",
+      "traits": [
+        "Portuguese",
+        "Brazil",
+        "Single-speaker"
+      ]
+    },
+    "pt_BR-edresson": {
+      "display_name": "edresson",
+      "speaker_label": "",
+      "traits": [
+        "Portuguese",
+        "Brazil",
+        "Single-speaker"
+      ]
+    },
+    "pt_BR-faber": {
+      "display_name": "faber",
+      "speaker_label": "",
+      "traits": [
+        "Portuguese",
+        "Brazil",
+        "Single-speaker"
+      ]
+    },
+    "pt_BR-jeff": {
+      "display_name": "jeff",
+      "speaker_label": "",
+      "traits": [
+        "Portuguese",
+        "Brazil",
+        "Single-speaker"
+      ]
+    },
+    "pt_PT-tugão": {
+      "display_name": "tugão",
+      "speaker_label": "",
+      "traits": [
+        "Portuguese",
+        "Portugal",
+        "Single-speaker"
+      ]
+    },
+    "ro_RO-mihai": {
+      "display_name": "mihai",
+      "speaker_label": "",
+      "traits": [
+        "Romanian",
+        "Romania",
+        "Single-speaker"
+      ]
+    },
+    "ru_RU-denis": {
+      "display_name": "denis",
+      "speaker_label": "",
+      "traits": [
+        "Russian",
+        "Russia",
+        "Single-speaker"
+      ]
+    },
+    "ru_RU-dmitri": {
+      "display_name": "dmitri",
+      "speaker_label": "",
+      "traits": [
+        "Russian",
+        "Russia",
+        "Single-speaker"
+      ]
+    },
+    "ru_RU-irina": {
+      "display_name": "irina",
+      "speaker_label": "",
+      "traits": [
+        "Russian",
+        "Russia",
+        "Single-speaker"
+      ]
+    },
+    "ru_RU-ruslan": {
+      "display_name": "ruslan",
+      "speaker_label": "",
+      "traits": [
+        "Russian",
+        "Russia",
+        "Single-speaker"
+      ]
+    },
+    "sk_SK-lili": {
+      "display_name": "lili",
+      "speaker_label": "",
+      "traits": [
+        "Slovak",
+        "Slovakia",
+        "Single-speaker"
+      ]
+    },
+    "sl_SI-artur": {
+      "display_name": "artur",
+      "speaker_label": "",
+      "traits": [
+        "Slovenian",
+        "Slovenia",
+        "Single-speaker"
+      ]
+    },
+    "sq_AL-edon": {
+      "display_name": "edon",
+      "speaker_label": "",
+      "traits": [
+        "Albanian",
+        "Albania",
+        "Single-speaker"
+      ]
+    },
+    "sr_RS-serbski_institut": {
+      "display_name": "serbski_institut",
+      "speaker_label": "Speaker {ordinal}",
+      "traits": [
+        "Serbian",
+        "Serbia",
+        "Multi-speaker"
+      ]
+    },
+    "sv_SE-alma": {
+      "display_name": "alma",
+      "speaker_label": "",
+      "traits": [
+        "Swedish",
+        "Sweden",
+        "Single-speaker"
+      ]
+    },
+    "sv_SE-lisa": {
+      "display_name": "lisa",
+      "speaker_label": "",
+      "traits": [
+        "Swedish",
+        "Sweden",
+        "Single-speaker"
+      ]
+    },
+    "sv_SE-nst": {
+      "display_name": "nst",
+      "speaker_label": "",
+      "traits": [
+        "Swedish",
+        "Sweden",
+        "Single-speaker"
+      ]
+    },
+    "sw_CD-lanfrica": {
+      "display_name": "lanfrica",
+      "speaker_label": "",
+      "traits": [
+        "Swahili",
+        "Democratic Republic of the Congo",
+        "Single-speaker"
+      ]
+    },
+    "te_IN-maya": {
+      "display_name": "maya",
+      "speaker_label": "",
+      "traits": [
+        "Telugu",
+        "India",
+        "Single-speaker"
+      ]
+    },
+    "te_IN-padmavathi": {
+      "display_name": "padmavathi",
+      "speaker_label": "",
+      "traits": [
+        "Telugu",
+        "India",
+        "Single-speaker"
+      ]
+    },
+    "te_IN-venkatesh": {
+      "display_name": "venkatesh",
+      "speaker_label": "",
+      "traits": [
+        "Telugu",
+        "India",
+        "Single-speaker"
+      ]
+    },
+    "tr_TR-dfki": {
+      "display_name": "dfki",
+      "speaker_label": "",
+      "traits": [
+        "Turkish",
+        "Turkey",
+        "Single-speaker"
+      ]
+    },
+    "uk_UA-lada": {
+      "display_name": "lada",
+      "speaker_label": "",
+      "traits": [
+        "Ukrainian",
+        "Ukraine",
+        "Single-speaker"
+      ]
+    },
+    "uk_UA-mykyta": {
+      "display_name": "mykyta",
+      "speaker_label": "",
+      "traits": [
+        "Ukrainian",
+        "Ukraine",
+        "Single-speaker"
+      ]
+    },
+    "uk_UA-oleksa": {
+      "display_name": "oleksa",
+      "speaker_label": "",
+      "traits": [
+        "Ukrainian",
+        "Ukraine",
+        "Single-speaker"
+      ]
+    },
+    "uk_UA-tetiana": {
+      "display_name": "tetiana",
+      "speaker_label": "",
+      "traits": [
+        "Ukrainian",
+        "Ukraine",
+        "Single-speaker"
+      ]
+    },
+    "uk_UA-ukrainian_tts": {
+      "display_name": "ukrainian_tts",
+      "speaker_label": "Speaker {ordinal}",
+      "traits": [
+        "Ukrainian",
+        "Ukraine",
+        "Multi-speaker"
+      ]
+    },
+    "ur_PK-aegis_female": {
+      "display_name": "aegis_female",
+      "speaker_label": "",
+      "traits": [
+        "Urdu",
+        "Pakistan",
+        "Single-speaker"
+      ]
+    },
+    "ur_PK-fasih": {
+      "display_name": "fasih",
+      "speaker_label": "",
+      "traits": [
+        "Urdu",
+        "Pakistan",
+        "Single-speaker"
+      ]
+    },
+    "vi_VN-25hours_single": {
+      "display_name": "25hours_single",
+      "speaker_label": "",
+      "traits": [
+        "Vietnamese",
+        "Vietnam",
+        "Single-speaker"
+      ]
+    },
+    "vi_VN-vais1000": {
+      "display_name": "vais1000",
+      "speaker_label": "",
+      "traits": [
+        "Vietnamese",
+        "Vietnam",
+        "Single-speaker"
+      ]
+    },
+    "vi_VN-vivos": {
+      "display_name": "vivos",
+      "speaker_label": "Speaker {ordinal}",
+      "traits": [
+        "Vietnamese",
+        "Vietnam",
+        "Multi-speaker"
+      ]
+    },
+    "zh_CN-chaowen": {
+      "display_name": "chaowen",
+      "speaker_label": "",
+      "traits": [
+        "Chinese",
+        "China",
+        "Single-speaker"
+      ]
+    },
+    "zh_CN-huayan": {
+      "display_name": "huayan",
+      "speaker_label": "",
+      "traits": [
+        "Chinese",
+        "China",
+        "Single-speaker"
+      ]
+    },
+    "zh_CN-xiao_ya": {
+      "display_name": "xiao_ya",
+      "speaker_label": "",
+      "traits": [
+        "Chinese",
+        "China",
+        "Single-speaker"
+      ]
+    }
+  }
+}

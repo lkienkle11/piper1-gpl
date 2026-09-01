@@ -19,6 +19,7 @@ from .voice_selection import (
     InvalidScriptError,
     TextAnalyzer,
     catalog_entry_from_config,
+    normalize_selection,
     normalize_voice_catalog,
 )
 
@@ -201,6 +202,9 @@ def create_app(
         voice_speed: float = 1.0,
         manual_voice_id: Optional[str] = None,
         emotion: str = "auto",
+        language_code: Optional[str] = None,
+        voice_family_id: Optional[str] = None,
+        quality: Optional[str] = None,
     ) -> Dict[str, Any]:
         voices, catalog_available, catalog_error = get_catalog()
         result = analyzer.analyze(
@@ -211,6 +215,9 @@ def create_app(
             voice_speed=voice_speed,
             manual_voice_id=manual_voice_id,
             emotion=emotion,
+            language_code=language_code,
+            voice_family_id=voice_family_id,
+            quality=quality,
         )
         result["catalog_available"] = catalog_available
         result["catalog_error"] = catalog_error
@@ -278,8 +285,15 @@ def create_app(
         if not text:
             return _json_error("No text provided", "invalid_text", 400)
 
-        mode = data.get("mode", "auto")
-        if mode not in ("auto", "manual"):
+        unified_selection = None
+        if "selection" in data:
+            try:
+                unified_selection = normalize_selection(data.get("selection"))
+            except ValueError as err:
+                return _json_error(str(err), "invalid_selection", 400)
+
+        mode = data.get("mode", "auto") if unified_selection is None else "unified"
+        if unified_selection is None and mode not in ("auto", "manual"):
             return _json_error("mode must be auto or manual", "invalid_mode", 400)
         manual_voice_id: Optional[str] = None
         if mode == "manual":
@@ -289,7 +303,11 @@ def create_app(
                     "voice is required in manual mode", "invalid_voice", 400
                 )
 
-        emotion = str(data.get("emotion", "auto")).strip().casefold()
+        emotion = (
+            unified_selection["emotion"]
+            if unified_selection is not None
+            else str(data.get("emotion", "auto")).strip().casefold()
+        )
         if emotion not in EMOTION_VALUES:
             choices = ", ".join(sorted(EMOTION_VALUES))
             return _json_error(
@@ -303,6 +321,23 @@ def create_app(
                 voice_speed=float(data.get("voice_speed", 1.0)),
                 manual_voice_id=manual_voice_id,
                 emotion=emotion,
+                language_code=(
+                    None
+                    if unified_selection is None
+                    or unified_selection["language"] == "auto"
+                    else unified_selection["language"]
+                ),
+                voice_family_id=(
+                    None
+                    if unified_selection is None or unified_selection["voice"] == "auto"
+                    else unified_selection["voice"]
+                ),
+                quality=(
+                    None
+                    if unified_selection is None
+                    or unified_selection["quality"] == "auto"
+                    else unified_selection["quality"]
+                ),
             )
         except InvalidScriptError as err:
             return _invalid_script_error(err)
@@ -332,8 +367,15 @@ def create_app(
     def app_synthesize() -> Any:
         """Synthesize audio with legacy, automatic, or manual voice selection."""
         data = request.get_json(silent=True) or {}
-        mode = data.get("mode")
-        if mode not in (None, "auto", "manual"):
+        unified_selection = None
+        if "selection" in data:
+            try:
+                unified_selection = normalize_selection(data.get("selection"))
+            except ValueError as err:
+                return _json_error(str(err), "invalid_selection", 400)
+
+        mode = "unified" if unified_selection is not None else data.get("mode")
+        if unified_selection is None and mode not in (None, "auto", "manual"):
             return _json_error("mode must be auto or manual", "invalid_mode", 400)
 
         text = str(data.get("text", "")).strip()
@@ -343,13 +385,20 @@ def create_app(
             return _json_error("No text provided", "invalid_text", 400)
 
         delivery = str(
-            data.get("delivery", "adaptive" if mode in ("auto", "manual") else "fixed")
+            data.get(
+                "delivery",
+                "adaptive" if mode in ("auto", "manual", "unified") else "fixed",
+            )
         )
         try:
             voice_speed = float(data.get("voice_speed", 1.0))
         except (TypeError, ValueError):
             return _json_error("voice_speed must be a number", "analysis_failed", 400)
-        emotion = str(data.get("emotion", "auto")).strip().casefold()
+        emotion = (
+            unified_selection["emotion"]
+            if unified_selection is not None
+            else str(data.get("emotion", "auto")).strip().casefold()
+        )
         if emotion not in EMOTION_VALUES:
             choices = ", ".join(sorted(EMOTION_VALUES))
             return _json_error(
@@ -357,7 +406,54 @@ def create_app(
             )
 
         analysis: Optional[Dict[str, Any]] = None
-        if mode == "auto":
+        if unified_selection is not None:
+            try:
+                analysis = analyze_text(
+                    text,
+                    delivery=delivery,
+                    voice_speed=voice_speed,
+                    emotion=emotion,
+                    language_code=(
+                        None
+                        if unified_selection["language"] == "auto"
+                        else unified_selection["language"]
+                    ),
+                    voice_family_id=(
+                        None
+                        if unified_selection["voice"] == "auto"
+                        else unified_selection["voice"]
+                    ),
+                    quality=(
+                        None
+                        if unified_selection["quality"] == "auto"
+                        else unified_selection["quality"]
+                    ),
+                )
+            except InvalidScriptError as err:
+                return _invalid_script_error(err)
+            except (TypeError, ValueError) as err:
+                return _json_error(str(err), "analysis_failed", 400)
+
+            selected_voice = analysis.get("voice")
+            if not selected_voice:
+                return _json_error(
+                    "No voice is available for the configured selection",
+                    "voice_unavailable",
+                    400,
+                )
+            model_id = selected_voice["key"]
+            if not selected_voice.get("installed"):
+                return (
+                    jsonify(
+                        {
+                            "error": "voice_not_installed",
+                            "message": f"Voice '{model_id}' must be downloaded before synthesis",
+                            "voice": selected_voice,
+                        }
+                    ),
+                    409,
+                )
+        elif mode == "auto":
             try:
                 analysis = analyze_text(
                     text,
@@ -421,7 +517,7 @@ def create_app(
             loaded_voices[model_id] = voice
 
         if voice is None:
-            if mode in ("auto", "manual"):
+            if mode in ("auto", "manual", "unified"):
                 return _json_error(
                     f"Voice '{model_id}' must be downloaded before synthesis",
                     "voice_not_installed",
@@ -446,9 +542,14 @@ def create_app(
             except (TypeError, ValueError) as err:
                 return _json_error(str(err), "analysis_failed", 400)
 
-        speaker_id: Optional[int] = data.get("speaker_id")
-        if (voice.config.num_speakers > 1) and (speaker_id is None):
+        if unified_selection is not None:
+            selected_speaker = unified_selection["speaker"]
+            speaker_id: Optional[int] = selected_speaker["id"]
+            speaker = selected_speaker["name"]
+        else:
+            speaker_id = data.get("speaker_id")
             speaker = data.get("speaker")
+        if (voice.config.num_speakers > 1) and (speaker_id is None):
             if speaker:
                 speaker_id = voice.config.speaker_id_map.get(speaker)
 

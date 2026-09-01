@@ -174,17 +174,19 @@ These reset commands preserve both `${PIPER_TEMP_ROOT}/piper1-gpl-voices` and
 
 Open [http://localhost:5000](http://localhost:5000) for the PyPI example, or
 [http://127.0.0.1:7860](http://127.0.0.1:7860) for the Linux and macOS source
-setups. The interface has two voice-selection modes:
+setups. The interface has one voice-selection panel. Language, Voice name, and
+Quality each offer `Auto Detect`, so automatic detection can be mixed with
+explicit choices. British English is preferred for English, with
+`en_GB-cori-high` as the default catalog candidate. English and Vietnamese
+also have local context/emotion rules that adjust synthesis prosody. The
+existing Emotion menu keeps `Auto detect`, `Neutral`, `Happy`, `Sad`, `Angry`,
+and `Excited`. Voices from the online catalog must be downloaded explicitly
+before synthesis. Adaptive delivery is enabled by default.
 
-* **Auto Detect** detects the dominant language and selects a matching voice.
-  British English is preferred for English, with `en_GB-cori-high` as the
-  default catalog candidate. English and Vietnamese also have local
-  context/emotion rules that adjust synthesis prosody.
-* **Manual Voice** selects language, voice name, quality, speaker, and an
-  optional emotion override. `Auto detect` keeps per-segment emotion analysis;
-  `Neutral`, `Happy`, `Sad`, `Angry`, and `Excited` force the matching prosody.
-  Voices from the online catalog must be downloaded explicitly before
-  synthesis. Adaptive delivery is enabled by default in both modes.
+Voice choices are sorted naturally (`Speaker 2` comes before `Speaker 10`).
+Very large multi-speaker corpus models are represented by one default-speaker
+choice in the picker so they do not flood the list; the complete model and
+speaker map remains available to automatic selection and API clients.
 
 The custom audio player supports seeking, volume, WAV download, and playback
 speed from `0.10x` to `5.00x`. Its slider advances in `0.05x` steps, while the
@@ -195,9 +197,9 @@ renders a responsive waveform: played audio is green and remaining audio is
 gray. Clicking, dragging, or using the arrow keys on the waveform seeks audio.
 
 The person button provides a quick picker containing installed voices for the
-current manual or automatically detected language. Choosing a voice updates
-the existing language/name/quality/speaker selectors and switches to Manual
-Voice mode. It never downloads a model automatically.
+current selected or automatically detected language. Choosing a voice updates
+the existing language/name/quality/speaker selectors. It never downloads a
+model automatically.
 
 Auto Detect uses one dominant language for the complete text, then analyzes
 paragraphs and sentences independently for delivery. It does not split
@@ -262,6 +264,10 @@ emotion, prosody, phonemes, alignments, and synthesis time when available.
         "country_english": "Great Britain"
       },
       "name": "cori",
+      "voice_family_id": "en_GB-cori",
+      "display_name": "Cori",
+      "display_traits": ["English", "Great Britain", "Single-speaker"],
+      "speaker_label": "Speaker {ordinal}",
       "quality": "high",
       "num_speakers": 1,
       "speakers": {},
@@ -323,9 +329,23 @@ The response contains:
 }
 ```
 
-`/analyze` also accepts `mode`, `voice` (required for manual mode), `delivery`,
-`voice_speed`, and `emotion`. Emotion defaults to `auto`; supported overrides
-are `neutral`, `happy`, `sad`, `angry`, and `excited`.
+`/analyze` also accepts the unified `selection` envelope:
+
+```json
+{
+  "language": "auto",
+  "voice": "auto",
+  "quality": "auto",
+  "speaker": null,
+  "emotion": "auto"
+}
+```
+
+Each field can remain automatic independently. Concrete values remain pinned
+for later text. The legacy `mode`, `voice`, `delivery`, `voice_speed`, and
+`emotion` fields remain supported; `selection` takes precedence when supplied.
+Emotion defaults to `auto`; supported overrides are `neutral`, `happy`, `sad`,
+`angry`, and `excited`.
 
 Possible fallback reasons are `text_too_short`, `low_confidence`, and
 `no_voice_for_language`.
@@ -352,13 +372,22 @@ curl -X POST -H 'Content-Type: application/json' \
   -o test.wav localhost:5000/synthesize
 ```
 
-Auto Detect request:
+Unified selection request:
 
 ```json
-{"text":"This is a happy local test!", "mode":"auto"}
+{
+  "text": "This is a happy local test!",
+  "selection": {
+    "language": "en_US",
+    "voice": "auto",
+    "quality": "high",
+    "speaker": null,
+    "emotion": "auto"
+  }
+}
 ```
 
-Manual Voice request:
+Legacy manual request (still supported):
 
 ```json
 {
@@ -375,14 +404,16 @@ Supported synthesis fields are:
 * `text` (required)
 * `mode`: `auto` or `manual`; omit for legacy behavior
 * `voice`: required by manual mode, optional for legacy behavior
+* `selection`: unified `language`, `voice`, `quality`, `speaker`, and `emotion`
+  values; each may use `auto`
 * `speaker` or `speaker_id`
-* `delivery`: `adaptive` or `fixed` (defaults to adaptive for auto/manual)
+* `delivery`: `adaptive` or `fixed` (defaults to adaptive for unified/auto/manual)
 * `voice_speed`: synthesis speed from `0.5` to `2.0`
 * `emotion`: `auto`, `neutral`, `happy`, `sad`, `angry`, or `excited`
 * `length_scale`, `noise_scale`, and `noise_w_scale`
 
 Explicit synthesis scale values override segment prosody. A forced emotion is
 also applied in Fixed Delivery, while `auto` retains its neutral fixed
-prosody. Requests without a `mode` retain fixed legacy delivery. A new-mode request
-for a voice that is not downloaded returns HTTP 409 with
+prosody. Requests without a `mode` or `selection` retain fixed legacy delivery.
+A unified or other new-mode request for a voice that is not downloaded returns HTTP 409 with
 `error: "voice_not_installed"`. Successful synthesis returns `audio/wav`.

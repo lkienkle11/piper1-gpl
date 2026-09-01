@@ -6,6 +6,8 @@ import re
 from dataclasses import dataclass
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Set, Tuple
 
+from .voice_metadata import display_metadata
+
 QUALITY_PRIORITY = {"medium": 0, "high": 1, "low": 2, "x_low": 3}
 PIPER_LANGUAGE_FAMILIES = {
     "ar",
@@ -588,22 +590,28 @@ def normalize_voice_catalog(
                 break
 
         speaker_id_map = dict(raw_voice.get("speaker_id_map", {}))
+        language_data = {
+            "code": language.get("code", voice_id.split("-")[0]),
+            "family": language.get("family", voice_id.split("_")[0].lower()),
+            "region": language.get("region", ""),
+            "name_native": language.get("name_native", ""),
+            "name_english": language.get("name_english", ""),
+            "country_english": language.get("country_english", ""),
+        }
+        voice_name = raw_voice.get("name", voice_id)
+        speaker_count = int(raw_voice.get("num_speakers", max(1, len(speaker_id_map))))
+        presentation = display_metadata(language_data, str(voice_name), speaker_count)
         normalized.append(
             {
                 "key": raw_voice.get("key", voice_id),
-                "language": {
-                    "code": language.get("code", voice_id.split("-")[0]),
-                    "family": language.get("family", voice_id.split("_")[0].lower()),
-                    "region": language.get("region", ""),
-                    "name_native": language.get("name_native", ""),
-                    "name_english": language.get("name_english", ""),
-                    "country_english": language.get("country_english", ""),
-                },
-                "name": raw_voice.get("name", voice_id),
+                "language": language_data,
+                "name": voice_name,
+                "voice_family_id": presentation["family_id"],
+                "display_name": presentation["display_name"],
+                "display_traits": presentation["traits"],
+                "speaker_label": presentation["speaker_label"],
                 "quality": raw_voice.get("quality", ""),
-                "num_speakers": int(
-                    raw_voice.get("num_speakers", max(1, len(speaker_id_map)))
-                ),
+                "num_speakers": speaker_count,
                 "speakers": speaker_id_map,
                 "model_size_bytes": model_size,
                 "installed": voice_id in installed_ids,
@@ -629,21 +637,29 @@ def catalog_entry_from_config(
     language = dict(config.get("language", {}))
     speaker_id_map = dict(config.get("speaker_id_map", {}))
     parts = voice_id.split("-")
+    language_data = {
+        "code": language.get("code", parts[0]),
+        "family": language.get("family", parts[0].split("_")[0].lower()),
+        "region": language.get("region", ""),
+        "name_native": language.get("name_native", ""),
+        "name_english": language.get("name_english", ""),
+        "country_english": language.get("country_english", ""),
+    }
+    voice_name = config.get("dataset", parts[1] if len(parts) > 1 else voice_id)
+    speaker_count = int(config.get("num_speakers", max(1, len(speaker_id_map))))
+    presentation = display_metadata(language_data, str(voice_name), speaker_count)
     return {
         "key": voice_id,
-        "language": {
-            "code": language.get("code", parts[0]),
-            "family": language.get("family", parts[0].split("_")[0].lower()),
-            "region": language.get("region", ""),
-            "name_native": language.get("name_native", ""),
-            "name_english": language.get("name_english", ""),
-            "country_english": language.get("country_english", ""),
-        },
-        "name": config.get("dataset", parts[1] if len(parts) > 1 else voice_id),
+        "language": language_data,
+        "name": voice_name,
+        "voice_family_id": presentation["family_id"],
+        "display_name": presentation["display_name"],
+        "display_traits": presentation["traits"],
+        "speaker_label": presentation["speaker_label"],
         "quality": config.get("audio", {}).get(
             "quality", parts[-1] if len(parts) > 2 else ""
         ),
-        "num_speakers": int(config.get("num_speakers", max(1, len(speaker_id_map)))),
+        "num_speakers": speaker_count,
         "speakers": speaker_id_map,
         "model_size_bytes": 0,
         "installed": installed,
@@ -654,6 +670,10 @@ def resolve_voice(
     language_family: str,
     voices: Sequence[Mapping[str, Any]],
     default_voice_id: str,
+    *,
+    language_code: Optional[str] = None,
+    voice_family_id: Optional[str] = None,
+    quality: Optional[str] = None,
 ) -> Optional[Dict[str, Any]]:
     """Choose a deterministic installed or catalog voice for a language."""
     candidates = [
@@ -661,16 +681,32 @@ def resolve_voice(
         for voice in voices
         if voice.get("language", {}).get("family") == language_family
     ]
+    if language_code:
+        candidates = [
+            voice
+            for voice in candidates
+            if voice.get("language", {}).get("code") == language_code
+        ]
+    if voice_family_id:
+        candidates = [
+            voice
+            for voice in candidates
+            if voice.get("voice_family_id") == voice_family_id
+            or voice.get("key") == voice_family_id
+        ]
+    if quality:
+        candidates = [voice for voice in candidates if voice.get("quality") == quality]
     if not candidates:
         return None
 
-    preferred_voice_id = AUTO_VOICE_DEFAULTS.get(language_family)
-    if preferred_voice_id:
-        for voice in candidates:
-            if voice["key"] == preferred_voice_id:
-                return voice
+    if not voice_family_id and not quality:
+        preferred_voice_id = AUTO_VOICE_DEFAULTS.get(language_family)
+        if preferred_voice_id:
+            for voice in candidates:
+                if voice["key"] == preferred_voice_id:
+                    return voice
 
-    preferred_locale = AUTO_LOCALE_DEFAULTS.get(language_family)
+    preferred_locale = language_code or AUTO_LOCALE_DEFAULTS.get(language_family)
     preferred = [
         voice
         for voice in candidates
@@ -700,6 +736,46 @@ def resolve_voice(
             voice["key"],
         ),
     )
+
+
+def normalize_selection(selection: Any) -> Dict[str, Any]:
+    """Validate the independent automatic/manual selection dimensions."""
+    value = selection if isinstance(selection, Mapping) else {}
+
+    def choice(name: str, allowed: Optional[Set[str]] = None) -> str:
+        selected = value.get(name, "auto")
+        if not isinstance(selected, str):
+            raise ValueError(f"selection.{name} must be a string")
+        selected = selected.strip()
+        if not selected:
+            return "auto"
+        if allowed and selected not in allowed and selected != "auto":
+            raise ValueError(f"selection.{name} contains an unsupported value")
+        return selected
+
+    speaker = value.get("speaker")
+    speaker_name: Optional[str] = None
+    speaker_id: Optional[int] = None
+    if speaker is not None:
+        if not isinstance(speaker, Mapping):
+            raise ValueError("selection.speaker must be an object")
+        raw_name = speaker.get("name")
+        if raw_name is not None:
+            if not isinstance(raw_name, str) or not raw_name.strip():
+                raise ValueError("selection.speaker.name must be a non-empty string")
+            speaker_name = raw_name.strip()
+        raw_id = speaker.get("id")
+        if raw_id is not None:
+            if isinstance(raw_id, bool) or not isinstance(raw_id, int) or raw_id < 0:
+                raise ValueError("selection.speaker.id must be a non-negative integer")
+            speaker_id = raw_id
+    return {
+        "language": choice("language"),
+        "voice": choice("voice"),
+        "quality": choice("quality", set(QUALITY_PRIORITY)),
+        "speaker": {"name": speaker_name, "id": speaker_id},
+        "emotion": choice("emotion", set(EMOTION_VALUES)),
+    }
 
 
 class TextAnalyzer:
@@ -743,6 +819,9 @@ class TextAnalyzer:
         voice_speed: float = 1.0,
         manual_voice_id: Optional[str] = None,
         emotion: str = "auto",
+        language_code: Optional[str] = None,
+        voice_family_id: Optional[str] = None,
+        quality: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Analyze text and resolve the most suitable Piper voice."""
         if delivery not in ("adaptive", "fixed"):
@@ -777,6 +856,38 @@ class TextAnalyzer:
                 raise ValueError(f"Unknown voice: {manual_voice_id}")
             language_family = voice.get("language", {}).get("family", default_family)
             confidence = 1.0
+        elif voice_family_id:
+            pinned = [
+                voice
+                for voice in voices
+                if voice.get("voice_family_id") == voice_family_id
+                or voice.get("key") == voice_family_id
+            ]
+            if not pinned:
+                raise ValueError(f"Unknown voice family: {voice_family_id}")
+            if language_code and any(
+                voice.get("language", {}).get("code") != language_code
+                for voice in pinned
+            ):
+                raise ValueError(
+                    f"Voice family {voice_family_id} is not available for language {language_code}"
+                )
+            language_family = (
+                pinned[0].get("language", {}).get("family", default_family)
+            )
+            confidence = 1.0
+        elif language_code:
+            language_candidates = [
+                voice
+                for voice in voices
+                if voice.get("language", {}).get("code") == language_code
+            ]
+            if not language_candidates:
+                raise ValueError(f"Unknown language: {language_code}")
+            language_family = (
+                language_candidates[0].get("language", {}).get("family", default_family)
+            )
+            confidence = 1.0
         elif letter_count < 3:
             fallback_reason = "text_too_short"
         else:
@@ -803,8 +914,23 @@ class TextAnalyzer:
         detected_emotion, context = classify_text(narration_text, language_family)
         overall_emotion = detected_emotion if emotion_mode == "auto" else emotion_mode
         if voice is None:
-            voice = resolve_voice(language_family, voices, default_voice_id)
+            voice = resolve_voice(
+                language_family,
+                voices,
+                default_voice_id,
+                language_code=language_code,
+                voice_family_id=voice_family_id,
+                quality=quality,
+            )
         if voice is None:
+            if voice_family_id and quality:
+                raise ValueError(
+                    f"Voice family {voice_family_id} is not available at quality {quality}"
+                )
+            if language_code and quality:
+                raise ValueError(
+                    f"No voice is available for language {language_code} at quality {quality}"
+                )
             fallback_reason = fallback_reason or "no_voice_for_language"
 
         text_segment_indexes = [
