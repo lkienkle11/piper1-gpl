@@ -8,6 +8,9 @@ from typing import Any, Dict, Iterable
 import pytest
 
 from piper.http_server import create_app
+from piper.linguistic_analysis import LinguisticAnalysis
+from piper.prosody import map_plan_to_segments
+from piper.semantic_analysis import ExternalSemanticAnalyzer, SemanticAnalysis
 from piper.voice_metadata import (
     VOICE_DISPLAY_METADATA,
     metadata_missing_for_catalog,
@@ -342,6 +345,111 @@ class _FakeDetector:
         return [(_FakeDetectedLanguage(self.result), self.confidence)]
 
 
+def test_analyzer_composes_local_structure_provider_and_linguistic_metadata() -> None:
+    voices = [
+        _catalog_voice("en_US-lessac-medium", "en", "en_US", "lessac", "medium", True)
+    ]
+
+    class FakeLinguisticAnalyzer:
+        def analyze(self, text: str, language: str) -> LinguisticAnalysis:
+            return LinguisticAnalysis(
+                text=text,
+                language=language,
+                sentences=({"text": "Are you ready?", "tokens": []},),
+                source="stanza",
+            )
+
+    analyzer = TextAnalyzer()
+    analyzer.set_linguistic_analyzer(FakeLinguisticAnalyzer())  # type: ignore[arg-type]
+    analyzer.set_semantic_analyzer(
+        ExternalSemanticAnalyzer(
+            lambda _text, _language: {
+                "context": "announcement",
+                "intent": "statement",
+                "emotion": "happy",
+                "events": [
+                    {
+                        "kind": "pitch",
+                        "dimension": "pitch",
+                        "value": 0.5,
+                        "text_start": 0,
+                        "text_end": 3,
+                        "confidence": 0.8,
+                    }
+                ],
+            }
+        )
+    )
+
+    result = analyzer.analyze(
+        "Are you ready?\n\nYes.",
+        voices,
+        "en_US-lessac-medium",
+        language_code="en_US",
+    )
+
+    assert result["linguistic"]["text"] == "Are you ready?\n\nYes."
+    assert result["segments"][0]["context"] == "question"
+    assert result["segments"][0]["emotion"] == "happy"
+    assert result["prosody_plan"]["intent"] == "statement"
+    assert result["prosody_plan"]["events"][0]["supported"] is False
+
+
+def test_explicit_script_emotion_is_not_overridden_by_provider() -> None:
+    voices = [
+        _catalog_voice("en_US-lessac-medium", "en", "en_US", "lessac", "medium", True)
+    ]
+    analyzer = TextAnalyzer()
+    analyzer.set_semantic_analyzer(
+        ExternalSemanticAnalyzer(
+            lambda _text, _language: {
+                "context": "announcement",
+                "intent": "statement",
+                "emotion": "happy",
+                "events": [],
+            }
+        )
+    )
+
+    result = analyzer.analyze(
+        "(emotion: sad)\n\nThis is explicit.",
+        voices,
+        "en_US-lessac-medium",
+        language_code="en_US",
+    )
+
+    assert result["segments"][0]["emotion"] == "sad"
+
+
+def test_disabling_provider_rolls_back_to_local_analysis() -> None:
+    voices = [
+        _catalog_voice("en_US-lessac-medium", "en", "en_US", "lessac", "medium", True)
+    ]
+    analyzer = TextAnalyzer()
+    analyzer.set_semantic_analyzer(
+        ExternalSemanticAnalyzer(
+            lambda _text, _language: {
+                "context": "announcement",
+                "intent": "statement",
+                "emotion": "happy",
+                "events": [],
+            }
+        )
+    )
+    analyzer.set_semantic_analyzer(None)
+
+    result = analyzer.analyze(
+        "A factual passage.",
+        voices,
+        "en_US-lessac-medium",
+        language_code="en_US",
+    )
+
+    assert result["emotion"] == "neutral"
+    assert result["context"] == "narration"
+    assert result["prosody_plan"]["intent"] is None
+
+
 def test_analyzer_uses_dominant_language_and_short_text_fallback() -> None:
     voices = [
         _catalog_voice("en_US-lessac-medium", "en", "en_US", "lessac", "medium", True),
@@ -382,6 +490,49 @@ def test_analyzer_applies_adaptive_segments_and_manual_voice() -> None:
     assert text_segments[0]["pause_after"] == 0.3
     assert text_segments[1]["context"] == "question"
     assert text_segments[0]["prosody"]["length_scale"] < 1.0
+    assert result["prosody_plan"]["language_family"] == "en"
+    assert result["prosody_plan"]["supported_dimensions"] == ["duration"]
+    assert "acoustic:pitch" in result["prosody_plan"]["unavailable_signals"]
+
+
+def test_plan_mapping_preserves_legacy_segment_fields() -> None:
+    segments = [
+        {
+            "kind": "text",
+            "text": "Hello.",
+            "prosody": {"length_scale": 1.0},
+            "pause_after": 0.14,
+        }
+    ]
+    plan = {
+        "segments": [
+            {
+                "kind": "text",
+                "events": [
+                    {
+                        "kind": "boundary",
+                        "dimension": "duration",
+                        "value": 0.14,
+                        "supported": True,
+                    },
+                    {
+                        "kind": "pitch",
+                        "dimension": "pitch",
+                        "value": 0.2,
+                        "supported": False,
+                    },
+                ],
+            }
+        ]
+    }
+
+    mapped = map_plan_to_segments(segments, plan)
+
+    assert mapped[0]["text"] == segments[0]["text"]
+    assert mapped[0]["prosody"] == segments[0]["prosody"]
+    assert mapped[0]["pause_after"] == segments[0]["pause_after"]
+    assert mapped[0]["prosody_supported_dimensions"] == ["duration"]
+    assert mapped[0]["prosody_events"][1]["supported"] is False
 
 
 @pytest.mark.parametrize("delivery", ["adaptive", "fixed"])
@@ -570,6 +721,8 @@ def test_http_catalog_analyze_and_synthesis_modes(http_client: Any) -> None:
     legacy_response = http_client.post("/synthesize", json={"text": "Hello"})
     assert legacy_response.status_code == 200
     assert legacy_response.mimetype == "audio/wav"
+    execution = http_client.get("/info").get_json()["last"]["prosody_execution"]
+    assert execution["executor"] == "piper-legacy"
 
     auto_response = http_client.post(
         "/synthesize", json={"text": "Hello", "mode": "auto"}

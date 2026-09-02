@@ -111,6 +111,9 @@ setup(
         "ja": [
             "pyopenjtalk-plus>=0.4,<1",
         ],
+        "nlp": [
+            "stanza>=1.8,<2",
+        ],
     },
     packages=[
         "piper",

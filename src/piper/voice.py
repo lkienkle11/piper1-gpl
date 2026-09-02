@@ -18,6 +18,7 @@ from .config import PhonemeType, PiperConfig, SynthesisConfig
 from .const import BOS, EOS, PAD
 from .phoneme_ids import phonemes_to_ids
 from .phonemize_espeak import ESPEAK_DATA_DIR, EspeakPhonemizer
+from .prosody import filter_unsupported_phoneme_markers
 from .tashkeel import TashkeelDiacritizer
 
 _ESPEAK_PHONEMIZER: Optional[EspeakPhonemizer] = None
@@ -210,7 +211,8 @@ class PiperVoice:
 
         if self.config.phoneme_type == PhonemeType.TEXT:
             # Phonemes = codepoints
-            return [list(unicodedata.normalize("NFD", text))]
+            phoneme_groups = [list(unicodedata.normalize("NFD", text))]
+            return self._filter_declared_phoneme_markers(phoneme_groups)
 
         if self.config.phoneme_type == PhonemeType.PINYIN:
             from .phonemize_chinese import ChinesePhonemizer
@@ -221,7 +223,7 @@ class PiperVoice:
                 phonemizer = ChinesePhonemizer(self.download_dir / "g2pW")
                 setattr(self, "_chinese_phonemizer", phonemizer)
 
-            return phonemizer.phonemize(text)
+            return self._filter_declared_phoneme_markers(phonemizer.phonemize(text))
 
         if self.config.phoneme_type == PhonemeType.HEBREW:
             from .phonemize_hebrew import HebrewPhonemizer
@@ -232,7 +234,7 @@ class PiperVoice:
                 phonemizer = HebrewPhonemizer()
                 setattr(self, "_hebrew_phonemizer", phonemizer)
 
-            return phonemizer.phonemize(text)
+            return self._filter_declared_phoneme_markers(phonemizer.phonemize(text))
 
         if self.config.phoneme_type == PhonemeType.JAPANESE:
             from .phonemize_japanese import JapanesePhonemizer
@@ -243,7 +245,7 @@ class PiperVoice:
                 phonemizer = JapanesePhonemizer()
                 setattr(self, "_japanese_phonemizer", phonemizer)
 
-            return phonemizer.phonemize(text)
+            return self._filter_declared_phoneme_markers(phonemizer.phonemize(text))
 
         if self.config.phoneme_type != PhonemeType.ESPEAK:
             raise ValueError(f"Unexpected phoneme type: {self.config.phoneme_type}")
@@ -302,7 +304,18 @@ class PiperVoice:
             # Remove empty phonemes
             phonemes.pop()
 
-        return phonemes
+        return self._filter_declared_phoneme_markers(phonemes)
+
+    def _filter_declared_phoneme_markers(
+        self, phoneme_groups: list[list[str]]
+    ) -> list[list[str]]:
+        """Apply an explicit marker allowlist without changing legacy voices."""
+        if "phoneme_markers" not in self.config.prosody:
+            return phoneme_groups
+        capabilities = self.config.prosody_capabilities()
+        return filter_unsupported_phoneme_markers(
+            phoneme_groups, capabilities.phoneme_markers
+        )
 
     def phonemes_to_ids(self, phonemes: list[str]) -> list[int]:
         """

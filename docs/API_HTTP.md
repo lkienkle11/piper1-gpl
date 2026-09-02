@@ -63,7 +63,14 @@ fi
 python3.12 -m venv "${PIPER_TEMP_ROOT}/piper1-gpl-env"
 
 "${PIPER_TEMP_ROOT}/piper1-gpl-env/bin/python" -m pip install --upgrade pip
-"${PIPER_TEMP_ROOT}/piper1-gpl-env/bin/python" -m pip install '.[http]'
+"${PIPER_TEMP_ROOT}/piper1-gpl-env/bin/python" -m pip install '.[http,nlp]'
+
+# Download the optional Stanza resources used by the five pilot languages.
+PIPER_STANZA_DIR="${PIPER_TEMP_ROOT}/piper1-gpl-stanza"
+mkdir -p "${PIPER_STANZA_DIR}"
+PIPER_STANZA_DIR="${PIPER_STANZA_DIR}" \
+  "${PIPER_TEMP_ROOT}/piper1-gpl-env/bin/python" -c \
+  'import os, stanza; [stanza.download(lang, model_dir=os.environ["PIPER_STANZA_DIR"]) for lang in ("ar", "en", "ja", "vi", "zh")]'
 
 mkdir -p "${PIPER_TEMP_ROOT}/piper1-gpl-voices"
 "${PIPER_TEMP_ROOT}/piper1-gpl-env/bin/python" -m piper.download_voices \
@@ -75,6 +82,7 @@ mkdir -p "${PIPER_TEMP_ROOT}/piper1-gpl-voices"
   --port 7860 \
   --data-dir "${PIPER_TEMP_ROOT}/piper1-gpl-voices" \
   --download-dir "${PIPER_TEMP_ROOT}/piper1-gpl-voices" \
+  --linguistic-model-dir "${PIPER_STANZA_DIR}" \
   -m en_GB-cori-high
 ```
 
@@ -91,8 +99,14 @@ python3.12 -m venv .venv
 source .venv/bin/activate
 
 python -m pip install --upgrade pip
-python -m pip install -e '.[http,dev]'
+python -m pip install -e '.[http,dev,nlp]'
 ./script/dev_build
+
+# Download the optional Stanza resources used by the five pilot languages.
+PIPER_STANZA_DIR="${PWD}/local/stanza"
+mkdir -p "${PIPER_STANZA_DIR}"
+PIPER_STANZA_DIR="${PIPER_STANZA_DIR}" python -c \
+  'import os, stanza; [stanza.download(lang, model_dir=os.environ["PIPER_STANZA_DIR"]) for lang in ("ar", "en", "ja", "vi", "zh")]'
 
 mkdir -p local/voices
 python -m piper.download_voices \
@@ -104,6 +118,7 @@ python -m piper.http_server \
   --port 7860 \
   --data-dir local/voices \
   --download-dir local/voices \
+  --linguistic-model-dir "${PIPER_STANZA_DIR}" \
   -m en_GB-cori-high
 ```
 
@@ -124,8 +139,14 @@ python3.12 -m venv .venv
 source .venv/bin/activate
 
 python -m pip install --upgrade pip
-python -m pip install -e '.[http,dev]'
+python -m pip install -e '.[http,dev,nlp]'
 ./script/dev_build
+
+# Download the optional Stanza resources used by the five pilot languages.
+PIPER_STANZA_DIR="${PIPER_TEMP_ROOT}/piper1-gpl-stanza"
+mkdir -p "${PIPER_STANZA_DIR}"
+PIPER_STANZA_DIR="${PIPER_STANZA_DIR}" python -c \
+  'import os, stanza; [stanza.download(lang, model_dir=os.environ["PIPER_STANZA_DIR"]) for lang in ("ar", "en", "ja", "vi", "zh")]'
 
 mkdir -p "${PIPER_TEMP_ROOT}/piper1-gpl-voices"
 python -m piper.download_voices \
@@ -137,10 +158,168 @@ python -m piper.http_server \
   --port 7860 \
   --data-dir "${PIPER_TEMP_ROOT}/piper1-gpl-voices" \
   --download-dir "${PIPER_TEMP_ROOT}/piper1-gpl-voices" \
+  --linguistic-model-dir "${PIPER_STANZA_DIR}" \
   -m en_GB-cori-high
 ```
 
 Open [http://127.0.0.1:7860](http://127.0.0.1:7860).
+
+The three source setups above install the optional `nlp` extra and download
+Stanza resources for Arabic, English, Japanese, Vietnamese, and Chinese. The
+resources are stored in `PIPER_STANZA_DIR` and are used through
+`--linguistic-model-dir`; they are not downloaded by the web interface.
+
+The deeper semantic provider is separate and remains disabled by default. If a
+local `llama.cpp` server and GGUF model are available, start that server
+separately on loopback, then add these options to the Piper server command:
+
+```sh
+--semantic-enable \
+--semantic-endpoint http://127.0.0.1:8080/completion
+```
+
+The model is selected and loaded only by `llama-server`; Piper connects to
+that already-running endpoint and does not need a second model argument. Piper
+does not download or start the GGUF model, and this setup does not use Ollama.
+See [semantic-benchmark.md](semantic-benchmark.md) for the benchmark runner
+and model evaluation procedure.
+
+### Install llama.cpp on each operating system
+
+The semantic provider requires the `llama-server` executable and a compatible
+GGUF model. Install `llama.cpp` separately from Piper, then verify that the
+server executable is available on `PATH`.
+
+#### macOS
+
+Install the Homebrew formula:
+
+```sh
+brew install llama.cpp
+llama-server --version
+```
+
+#### Linux
+
+For an Ubuntu or Debian VPS, use the native package manager and build the
+server from source. Homebrew is not required:
+
+```sh
+sudo apt-get update
+sudo apt-get install -y build-essential cmake git
+git clone https://github.com/ggml-org/llama.cpp.git
+cd llama.cpp
+cmake -B build
+cmake --build build --config Release -t llama-server
+./build/bin/llama-server --version
+```
+
+For Fedora, RHEL, or CentOS, install the equivalent native toolchain first:
+
+```sh
+sudo dnf install -y gcc-c++ cmake git
+```
+
+Then run the same `git clone`, `cmake`, and build commands above. A pre-built
+Linux CPU/GPU archive can also be downloaded from the
+[llama.cpp releases](https://github.com/ggml-org/llama.cpp/releases) when a
+compiler toolchain is not desirable. Homebrew for Linux and Nix are optional
+alternatives, not prerequisites.
+
+The official Nix package is also supported:
+
+```sh
+nix profile install nixpkgs#llama-cpp
+llama-server --version
+```
+
+#### Windows
+
+Install the pre-built package with WinGet from PowerShell:
+
+```powershell
+winget install llama.cpp
+llama-server.exe --version
+```
+
+If WinGet is unavailable, download the matching Windows CPU/GPU archive from
+the [llama.cpp releases](https://github.com/ggml-org/llama.cpp/releases),
+extract it, and run `llama-server.exe` from that directory. Choose the archive
+matching the machine architecture and accelerator; the CPU build is the
+portable fallback.
+
+#### Download a GGUF model and start the server
+
+The simplest option is to let `llama.cpp` download a compatible GGUF model from
+Hugging Face. The following Qwen3-4B quantized model is a multilingual pilot
+candidate; benchmark it before using it in production. The `-hf` option
+downloads the model into the llama.cpp cache automatically:
+
+```sh
+llama-server \
+  -hf Qwen/Qwen3-4B-GGUF:Q4_K_M \
+  --host 127.0.0.1 \
+  --port 8080
+```
+
+On Windows PowerShell:
+
+```powershell
+llama-server.exe `
+  -hf Qwen/Qwen3-4B-GGUF:Q4_K_M `
+  --host 127.0.0.1 `
+  --port 8080
+```
+
+Model page: [Qwen3-4B-GGUF](https://huggingface.co/Qwen/Qwen3-4B-GGUF).
+
+If a manually downloaded GGUF file is preferred, place it in a directory
+outside the Piper source checkout:
+
+```sh
+mkdir -p local/models
+```
+
+Start the server with the platform-specific executable. The default endpoint
+is `127.0.0.1:8080`:
+
+```sh
+llama-server \
+  -m /absolute/path/to/model.gguf \
+  --host 127.0.0.1 \
+  --port 8080
+```
+
+On Windows PowerShell:
+
+```powershell
+llama-server.exe `
+  -m C:\path\to\model.gguf `
+  --host 127.0.0.1 `
+  --port 8080
+```
+
+Verify the endpoint before starting Piper:
+
+```sh
+curl http://127.0.0.1:8080/health
+```
+
+Then append the following options to the Piper server command from any setup
+above:
+
+```text
+--semantic-enable
+--semantic-endpoint http://127.0.0.1:8080/completion
+```
+
+The model is selected in the `llama-server` command above. If you use the
+manual `-m` form instead of `-hf`, pass the local GGUF path to `llama-server`
+there; do not pass that path to Piper.
+
+The official installation options and server build commands are documented in
+the [llama.cpp installation guide](https://github.com/ggml-org/llama.cpp/blob/master/docs/install.md)
+and [server guide](https://github.com/ggml-org/llama.cpp/blob/master/tools/server/README.md).
 
 ### Optional clean reset
 
@@ -167,8 +346,8 @@ path, remove the generated build cache before installing again:
 rm -rf _skbuild
 ```
 
-These reset commands preserve both `${PIPER_TEMP_ROOT}/piper1-gpl-voices` and
-`local/voices`.
+These reset commands preserve `${PIPER_TEMP_ROOT}/piper1-gpl-voices`,
+`${PIPER_TEMP_ROOT}/piper1-gpl-stanza`, `local/voices`, and `local/stanza`.
 
 ## Web interface
 

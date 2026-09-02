@@ -4,6 +4,8 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Final, Mapping, Optional, Sequence, Set, Tuple
 
+from .prosody import VoiceCapabilities
+
 DEFAULT_NOISE_SCALE: Final = 0.667
 DEFAULT_LENGTH_SCALE: Final = 1.0
 DEFAULT_NOISE_W_SCALE: Final = 0.8
@@ -63,6 +65,9 @@ class PiperConfig:
     default_speaker_id: int = 0
     """Id of the default speaker for multi-speaker voices."""
 
+    prosody: Mapping[str, Any] = field(default_factory=dict)
+    """Optional prosody capability metadata for expressive voice exports."""
+
     @staticmethod
     def from_dict(config: dict[str, Any]) -> "PiperConfig":
         """Load configuration from a dictionary."""
@@ -91,6 +96,15 @@ class PiperConfig:
             ),
             #
             default_speaker_id=config.get("default_speaker_id", 0),
+            prosody=config.get("prosody", {}),
+        )
+
+    def prosody_capabilities(self, model_id: str = "") -> VoiceCapabilities:
+        """Return declared capabilities, defaulting safely for legacy voices."""
+        return VoiceCapabilities.from_mapping(
+            model_id,
+            self.prosody,
+            num_speakers=self.num_speakers,
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -115,6 +129,9 @@ class PiperConfig:
             "hop_length": self.hop_length,
             "default_speaker_id": self.default_speaker_id,
         }
+
+        if self.prosody:
+            config_dict["prosody"] = dict(self.prosody)
 
         if self.piper_version:
             config_dict["piper_version"] = self.piper_version

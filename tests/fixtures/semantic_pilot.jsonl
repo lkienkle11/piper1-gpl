@@ -1,0 +1,5 @@
+{"language":"en","text":"The report is ready.","expected":{"context":"narration","intent":"statement","emotion":"neutral"}}
+{"language":"vi","text":"Bạn có khỏe không?","expected":{"context":"question","intent":"question","emotion":"neutral"}}
+{"language":"zh","text":"太棒了！","expected":{"context":"announcement","intent":"announcement","emotion":"happy"}}
+{"language":"ja","text":"静かな朝です。","expected":{"context":"narration","intent":"statement","emotion":"neutral"}}
+{"language":"ar","text":"انتبه لهذا الخبر!","expected":{"context":"announcement","intent":"warning","emotion":"excited"}}

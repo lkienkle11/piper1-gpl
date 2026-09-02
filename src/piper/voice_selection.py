@@ -6,6 +6,9 @@ import re
 from dataclasses import dataclass
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Set, Tuple
 
+from .prosody import ProsodyEvent, ProsodyPlan, ProsodySegment, VoiceCapabilities
+from .linguistic_analysis import LinguisticAnalysis, StanzaLinguisticAnalyzer
+from .semantic_analysis import ExternalSemanticAnalyzer, SemanticAnalysis
 from .voice_metadata import display_metadata
 
 QUALITY_PRIORITY = {"medium": 0, "high": 1, "low": 2, "x_low": 3}
@@ -134,6 +137,8 @@ class ScriptSegment:
     narration_mode: str = "normal"
     paragraph_end: bool = False
     pause: float = 0.0
+    paragraph_index: int = 0
+    sentence_index: int = 0
 
 
 @dataclass(frozen=True)
@@ -351,7 +356,7 @@ def _split_sentences(text: str) -> List[str]:
             continue
 
         char = text[index]
-        if in_phonemes or char not in ".!?…":
+        if in_phonemes or char not in ".!?！？。":
             index += 1
             continue
 
@@ -378,7 +383,8 @@ def _split_sentences(text: str) -> List[str]:
             end += 1
         while end < len(text) and text[end] in _CLOSING_PUNCTUATION:
             end += 1
-        if end < len(text) and not text[end].isspace():
+        # CJK sentence punctuation commonly has no whitespace after it.
+        if end < len(text) and not text[end].isspace() and char not in "！？。":
             index = end
             continue
 
@@ -445,7 +451,7 @@ def parse_script(
     emotion = base_emotion
     narration_mode = "normal"
     segments: List[ScriptSegment] = []
-    for block_line, block in blocks:
+    for paragraph_index, (block_line, block) in enumerate(blocks):
         directive = _DIRECTIVE_RE.fullmatch(block)
         if directive:
             name = directive.group(1).casefold()
@@ -498,6 +504,8 @@ def parse_script(
                     emotion=emotion,
                     narration_mode=narration_mode,
                     paragraph_end=sentence_index == len(sentences) - 1,
+                    paragraph_index=paragraph_index,
+                    sentence_index=sentence_index,
                 )
             )
 
@@ -576,6 +584,115 @@ def prosody_for(emotion: str, context: str) -> Dict[str, float]:
     }
 
 
+def build_prosody_plan(
+    text: str,
+    language_family: str,
+    language_code: Optional[str],
+    analyzed_segments: Sequence[Mapping[str, Any]],
+    voice: Optional[Mapping[str, Any]],
+    semantic_analysis: Optional[SemanticAnalysis] = None,
+    linguistic_analysis: Optional[LinguisticAnalysis] = None,
+) -> ProsodyPlan:
+    """Build a normalized plan from local analysis and voice metadata."""
+    voice_data = voice if isinstance(voice, Mapping) else {}
+    model_id = str(voice_data.get("key", ""))
+    capabilities = VoiceCapabilities.from_mapping(
+        model_id,
+        voice_data.get("prosody"),
+        num_speakers=int(voice_data.get("num_speakers", 1)),
+    )
+    requested_dimensions = frozenset(
+        {"duration", "pitch", "energy", "emphasis", "style"}
+    )
+    unavailable_signals: List[str] = []
+    if language_family not in LANGUAGE_RULES:
+        unavailable_signals.append(f"semantic_rules:{language_family}")
+    if semantic_analysis is not None:
+        unavailable_signals.extend(semantic_analysis.unavailable)
+    if linguistic_analysis is not None:
+        unavailable_signals.extend(
+            f"linguistic:{status}" for status in linguistic_analysis.unavailable
+        )
+    unavailable_signals.extend(
+        f"acoustic:{dimension}"
+        for dimension in sorted(requested_dimensions - capabilities.dimensions)
+    )
+
+    plan_segments: List[ProsodySegment] = []
+    plan_events: List[ProsodyEvent] = []
+    if semantic_analysis is not None:
+        plan_events.extend(
+            ProsodyEvent(
+                kind=event.kind,
+                dimension=event.dimension,
+                value=event.value,
+                text_start=event.text_start,
+                text_end=event.text_end,
+                source=event.source,
+                confidence=event.confidence,
+                supported=capabilities.supports(event.dimension or ""),
+            )
+            for event in semantic_analysis.events
+        )
+    for item in analyzed_segments:
+        kind = str(item.get("kind", "text"))
+        if kind == "pause":
+            pause = float(item.get("pause", 0.0))
+            event = ProsodyEvent(
+                kind="pause",
+                dimension="duration",
+                value=pause,
+                source="script",
+                supported=capabilities.supports("duration"),
+            )
+            plan_segments.append(
+                ProsodySegment(
+                    kind="pause",
+                    paragraph_index=int(item.get("paragraph_index", 0)),
+                    sentence_index=int(item.get("sentence_index", 0)),
+                    events=(event,),
+                )
+            )
+            plan_events.append(event)
+            continue
+
+        pause_after = float(item.get("pause_after", 0.0))
+        events: List[ProsodyEvent] = []
+        if pause_after > 0:
+            event = ProsodyEvent(
+                kind="boundary",
+                dimension="duration",
+                value=pause_after,
+                source="structure",
+                supported=capabilities.supports("duration"),
+            )
+            events.append(event)
+            plan_events.append(event)
+        plan_segments.append(
+            ProsodySegment(
+                kind="text",
+                text=str(item.get("text", "")),
+                paragraph_index=int(item.get("paragraph_index", 0)),
+                sentence_index=int(item.get("sentence_index", 0)),
+                context=str(item.get("context", "narration")),
+                emotion=str(item.get("emotion", "neutral")),
+                events=tuple(events),
+            )
+        )
+
+    return ProsodyPlan(
+        text=text,
+        language_family=language_family,
+        language_code=language_code,
+        segments=tuple(plan_segments),
+        events=tuple(plan_events),
+        requested_dimensions=requested_dimensions,
+        unavailable_signals=tuple(sorted(set(unavailable_signals))),
+        capabilities=capabilities,
+        intent=semantic_analysis.intent if semantic_analysis is not None else None,
+    )
+
+
 def normalize_voice_catalog(
     voices: Mapping[str, Mapping[str, Any]], installed_ids: Set[str]
 ) -> List[Dict[str, Any]]:
@@ -601,22 +718,23 @@ def normalize_voice_catalog(
         voice_name = raw_voice.get("name", voice_id)
         speaker_count = int(raw_voice.get("num_speakers", max(1, len(speaker_id_map))))
         presentation = display_metadata(language_data, str(voice_name), speaker_count)
-        normalized.append(
-            {
-                "key": raw_voice.get("key", voice_id),
-                "language": language_data,
-                "name": voice_name,
-                "voice_family_id": presentation["family_id"],
-                "display_name": presentation["display_name"],
-                "display_traits": presentation["traits"],
-                "speaker_label": presentation["speaker_label"],
-                "quality": raw_voice.get("quality", ""),
-                "num_speakers": speaker_count,
-                "speakers": speaker_id_map,
-                "model_size_bytes": model_size,
-                "installed": voice_id in installed_ids,
-            }
-        )
+        entry = {
+            "key": raw_voice.get("key", voice_id),
+            "language": language_data,
+            "name": voice_name,
+            "voice_family_id": presentation["family_id"],
+            "display_name": presentation["display_name"],
+            "display_traits": presentation["traits"],
+            "speaker_label": presentation["speaker_label"],
+            "quality": raw_voice.get("quality", ""),
+            "num_speakers": speaker_count,
+            "speakers": speaker_id_map,
+            "model_size_bytes": model_size,
+            "installed": voice_id in installed_ids,
+        }
+        if raw_voice.get("prosody"):
+            entry["prosody"] = dict(raw_voice["prosody"])
+        normalized.append(entry)
 
     return sorted(
         normalized,
@@ -648,7 +766,7 @@ def catalog_entry_from_config(
     voice_name = config.get("dataset", parts[1] if len(parts) > 1 else voice_id)
     speaker_count = int(config.get("num_speakers", max(1, len(speaker_id_map))))
     presentation = display_metadata(language_data, str(voice_name), speaker_count)
-    return {
+    entry = {
         "key": voice_id,
         "language": language_data,
         "name": voice_name,
@@ -664,6 +782,9 @@ def catalog_entry_from_config(
         "model_size_bytes": 0,
         "installed": installed,
     }
+    if config.get("prosody"):
+        entry["prosody"] = dict(config["prosody"])
+    return entry
 
 
 def resolve_voice(
@@ -784,6 +905,22 @@ class TextAnalyzer:
     def __init__(self) -> None:
         self._detector: Any = None
         self._detector_families: Tuple[str, ...] = ()
+        self._semantic_analyzer: Optional[ExternalSemanticAnalyzer] = None
+        self._linguistic_analyzer: Optional[StanzaLinguisticAnalyzer] = (
+            StanzaLinguisticAnalyzer()
+        )
+
+    def set_semantic_analyzer(
+        self, analyzer: Optional[ExternalSemanticAnalyzer]
+    ) -> None:
+        """Inject an optional server-side provider without changing the API."""
+        self._semantic_analyzer = analyzer
+
+    def set_linguistic_analyzer(
+        self, analyzer: Optional[StanzaLinguisticAnalyzer]
+    ) -> None:
+        """Inject or disable the optional local linguistic analyzer."""
+        self._linguistic_analyzer = analyzer
 
     def _get_detector(self, language_families: Iterable[str]) -> Any:
         piper_families = set(language_families) | PIPER_LANGUAGE_FAMILIES
@@ -913,6 +1050,21 @@ class TextAnalyzer:
 
         detected_emotion, context = classify_text(narration_text, language_family)
         overall_emotion = detected_emotion if emotion_mode == "auto" else emotion_mode
+        linguistic_analysis = (
+            self._linguistic_analyzer.analyze(text, language_family)
+            if self._linguistic_analyzer is not None
+            else None
+        )
+        semantic_analysis = (
+            self._semantic_analyzer.analyze(narration_text, language_family)
+            if self._semantic_analyzer is not None
+            else None
+        )
+        if semantic_analysis is not None:
+            if emotion_mode == "auto" and semantic_analysis.emotion:
+                overall_emotion = semantic_analysis.emotion
+            if semantic_analysis.context and context == "narration":
+                context = semantic_analysis.context
         if voice is None:
             voice = resolve_voice(
                 language_family,
@@ -965,6 +1117,21 @@ class TextAnalyzer:
                 not has_terminal and word_count <= 12
             ):
                 segment_context = "fragment"
+
+            if (
+                semantic_analysis is not None
+                and segment.emotion == "auto"
+                and segment_emotion == "neutral"
+                and semantic_analysis.emotion
+            ):
+                segment_emotion = semantic_analysis.emotion
+            if (
+                semantic_analysis is not None
+                and segment.narration_mode != "fragment"
+                and segment_context == "narration"
+                and semantic_analysis.context
+            ):
+                segment_context = semantic_analysis.context
 
             if delivery == "adaptive":
                 segment_prosody = prosody_for(segment_emotion, segment_context)
@@ -1020,6 +1187,16 @@ class TextAnalyzer:
             overall_prosody["length_scale"] / voice_speed, 4
         )
 
+        prosody_plan = build_prosody_plan(
+            text,
+            language_family,
+            voice.get("language", {}).get("code") if voice else None,
+            analyzed_segments,
+            voice,
+            semantic_analysis,
+            linguistic_analysis,
+        )
+
         return {
             "language": {
                 "family": language_family,
@@ -1031,12 +1208,21 @@ class TextAnalyzer:
             },
             "context": context,
             "emotion": overall_emotion,
+            "intent": (
+                semantic_analysis.intent if semantic_analysis is not None else None
+            ),
+            "linguistic": (
+                linguistic_analysis.to_dict()
+                if linguistic_analysis is not None
+                else None
+            ),
             "emotion_override": None if emotion_mode == "auto" else emotion_mode,
             "voice": voice,
             "delivery": delivery,
             "voice_speed": voice_speed,
             "prosody": overall_prosody,
             "segments": analyzed_segments,
+            "prosody_plan": prosody_plan.to_dict(),
             "installed": bool(voice and voice.get("installed")),
             "needs_download": bool(voice and not voice.get("installed")),
             "fallback_reason": fallback_reason,

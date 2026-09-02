@@ -14,6 +14,13 @@ from flask import Flask, Response, jsonify, render_template, request
 
 from . import PiperVoice, SynthesisConfig
 from .download_voices import VOICES_JSON, download_voice
+from .linguistic_analysis import StanzaLinguisticAnalyzer
+from .prosody import ProsodyPlan, map_plan_to_segments, negotiate_prosody
+from .semantic_analysis import (
+    ExternalSemanticAnalyzer,
+    LlamaCppSemanticProvider,
+    SemanticAnalyzerConfig,
+)
 from .voice_selection import (
     EMOTION_VALUES,
     InvalidScriptError,
@@ -135,6 +142,59 @@ def create_app(
     app = Flask(__name__, static_folder="img", static_url_path="/img")
     last_synthesis: Dict[str, Any] = {}
     analyzer = TextAnalyzer()
+    semantic_settings = dict(getattr(args, "semantic_config", {}) or {})
+    semantic_settings.setdefault(
+        "linguistic_enabled", not bool(getattr(args, "disable_linguistic", False))
+    )
+    semantic_settings.setdefault(
+        "linguistic_model_dir", getattr(args, "linguistic_model_dir", None)
+    )
+    semantic_settings.setdefault(
+        "linguistic_use_gpu", bool(getattr(args, "cuda", False))
+    )
+    semantic_settings.setdefault(
+        "enabled", bool(getattr(args, "semantic_enable", False))
+    )
+    semantic_settings.setdefault(
+        "endpoint", getattr(args, "semantic_endpoint", None)
+    )
+    semantic_settings.setdefault(
+        "timeout_seconds", getattr(args, "semantic_timeout", None)
+    )
+    semantic_settings.setdefault(
+        "max_text_length", getattr(args, "semantic_max_text_length", None)
+    )
+    semantic_settings.setdefault(
+        "allow_external_endpoint",
+        bool(getattr(args, "semantic_allow_external_endpoint", False)),
+    )
+    if getattr(args, "semantic_disable_privacy", False):
+        semantic_settings["privacy_mode"] = False
+    semantic_settings = {
+        key: value for key, value in semantic_settings.items() if value is not None
+    }
+    semantic_config = SemanticAnalyzerConfig.from_mapping(semantic_settings)
+    analyzer.set_linguistic_analyzer(
+        StanzaLinguisticAnalyzer(
+            model_dir=semantic_config.linguistic_model_dir,
+            use_gpu=semantic_config.linguistic_use_gpu,
+            enabled=semantic_config.linguistic_enabled,
+        )
+    )
+    if semantic_config.enabled:
+        analyzer.set_semantic_analyzer(
+            ExternalSemanticAnalyzer(
+                LlamaCppSemanticProvider(
+                    semantic_config.endpoint,
+                    timeout_seconds=semantic_config.timeout_seconds,
+                    max_text_length=semantic_config.max_text_length,
+                    allow_external_endpoint=semantic_config.allow_external_endpoint,
+                ),
+                timeout_seconds=semantic_config.timeout_seconds,
+                supported_languages=set(semantic_config.supported_languages),
+                max_text_length=semantic_config.max_text_length,
+            )
+        )
     catalog_cache: Dict[str, Any] = {
         "loaded_at": 0.0,
         "voices": {},
@@ -567,7 +627,16 @@ def create_app(
         ):
             speaker_id = voice.config.default_speaker_id
 
-        segments = [dict(segment) for segment in analysis["segments"]]
+        segments = map_plan_to_segments(
+            analysis["segments"], analysis.get("prosody_plan")
+        )
+        plan_data = analysis.get("prosody_plan")
+        plan = (
+            ProsodyPlan.from_dict(plan_data)
+            if isinstance(plan_data, Mapping)
+            else ProsodyPlan.empty(text, "")
+        )
+        execution = negotiate_prosody(plan)
         text_segment_indexes = [
             index for index, segment in enumerate(segments) if segment["kind"] == "text"
         ]
@@ -674,6 +743,7 @@ def create_app(
                 if first_text_segment is not None
                 else analysis["prosody"]
             ),
+            "prosody_execution": execution.to_dict(),
             "segments": executed_segments,
         }
         synthesis_details.update(
@@ -733,6 +803,47 @@ def main() -> None:
     )
     parser.add_argument(
         "--debug", action="store_true", help="Print DEBUG messages to console"
+    )
+    parser.add_argument(
+        "--disable-linguistic",
+        action="store_true",
+        help="Disable optional Stanza linguistic analysis",
+    )
+    parser.add_argument(
+        "--linguistic-model-dir",
+        help="Directory containing pre-installed Stanza resources",
+    )
+    parser.add_argument(
+        "--semantic-enable",
+        action="store_true",
+        help="Enable the opt-in local llama.cpp semantic analyzer",
+    )
+    parser.add_argument(
+        "--semantic-endpoint",
+        default="http://127.0.0.1:8080/completion",
+        help="Local llama.cpp completion endpoint",
+    )
+    parser.add_argument(
+        "--semantic-timeout",
+        type=float,
+        default=1.0,
+        help="Semantic provider timeout in seconds",
+    )
+    parser.add_argument(
+        "--semantic-max-text-length",
+        type=int,
+        default=4000,
+        help="Maximum characters sent to the semantic provider",
+    )
+    parser.add_argument(
+        "--semantic-allow-external-endpoint",
+        action="store_true",
+        help="Allow a non-loopback semantic endpoint when privacy is disabled",
+    )
+    parser.add_argument(
+        "--semantic-disable-privacy",
+        action="store_true",
+        help="Disable the loopback-only privacy policy for explicit deployments",
     )
     args = parser.parse_args()
     logging.basicConfig(level=logging.DEBUG if args.debug else logging.INFO)
