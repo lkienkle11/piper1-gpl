@@ -13,7 +13,13 @@ from urllib.request import urlopen
 from flask import Flask, Response, jsonify, render_template, request
 
 from . import PiperVoice, SynthesisConfig
-from .download_voices import VOICES_JSON, download_voice
+from .download_voices import (
+    VOICES_JSON,
+    VoiceDownloadCircuitOpenError,
+    VoiceDownloadPermanentError,
+    VoiceDownloadUpstreamError,
+    download_voice,
+)
 from .linguistic_analysis import StanzaLinguisticAnalyzer
 from .prosody import ProsodyPlan, map_plan_to_segments, negotiate_prosody
 from .semantic_analysis import (
@@ -41,6 +47,18 @@ def _fetch_voice_catalog() -> Mapping[str, Mapping[str, Any]]:
 
 def _json_error(message: str, code: str, status: int) -> tuple[Response, int]:
     return jsonify({"error": code, "message": message}), status
+
+
+def _download_error(err: Any) -> tuple[Response, int]:
+    """Return a stable download error and optional retry metadata."""
+    retry_after = getattr(err, "retry_after", None)
+    payload = {"error": err.error_code, "message": str(err)}
+    if retry_after is not None:
+        payload["retry_after"] = retry_after
+    response = jsonify(payload)
+    if retry_after is not None:
+        response.headers["Retry-After"] = str(retry_after)
+    return response, err.status_code
 
 
 def _invalid_script_error(err: InvalidScriptError) -> tuple[Response, int]:
@@ -155,9 +173,7 @@ def create_app(
     semantic_settings.setdefault(
         "enabled", bool(getattr(args, "semantic_enable", False))
     )
-    semantic_settings.setdefault(
-        "endpoint", getattr(args, "semantic_endpoint", None)
-    )
+    semantic_settings.setdefault("endpoint", getattr(args, "semantic_endpoint", None))
     semantic_settings.setdefault(
         "timeout_seconds", getattr(args, "semantic_timeout", None)
     )
@@ -289,7 +305,7 @@ def create_app(
 
         for data_dir in data_dirs:
             maybe_model_path = data_dir / f"{model_id}.onnx"
-            if maybe_model_path.exists():
+            if maybe_model_path.exists() and Path(f"{maybe_model_path}.json").exists():
                 return maybe_model_path
 
         return None
@@ -418,8 +434,14 @@ def create_app(
                 download_dir,
                 force_redownload=bool(data.get("force_redownload", False)),
             )
-        except (OSError, ValueError) as err:
+        except (VoiceDownloadCircuitOpenError, VoiceDownloadUpstreamError) as err:
+            return _download_error(err)
+        except VoiceDownloadPermanentError as err:
+            return _download_error(err)
+        except ValueError as err:
             return _json_error(str(err), "download_failed", 400)
+        except OSError as err:
+            return _json_error(str(err), "download_failed", 500)
 
         return model_id
 

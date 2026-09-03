@@ -63,6 +63,7 @@ setup(
     ],
     python_requires=">=3.9",
     install_requires=[
+        "filelock>=3,<4",
         "onnxruntime>=1,<2",
         "pathvalidate>=3,<4",
     ],

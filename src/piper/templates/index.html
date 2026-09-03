@@ -884,7 +884,9 @@
       if (contentType.includes("application/json")) {
         try {
           const result = await response.json();
-          return result.message || result.error || fallback;
+          const message = result.message || result.error || fallback;
+          const retryAfter = Number(result.retry_after || response.headers.get("Retry-After") || 0);
+          return retryAfter > 0 ? `${message} Retry after ${retryAfter} seconds.` : message;
         } catch (_error) {
           return fallback;
         }

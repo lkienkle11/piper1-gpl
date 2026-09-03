@@ -2,13 +2,17 @@
 
 import io
 import json
+import threading
+import time
 import wave
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, Dict, Iterable
 
 import pytest
 
+from piper.download_voices import download_voice as real_download_voice
 from piper.http_server import create_app
 from piper.linguistic_analysis import LinguisticAnalysis
 from piper.prosody import map_plan_to_segments
@@ -970,6 +974,168 @@ def test_http_auto_short_russian_requires_matching_voice_then_synthesizes(
     )
 
 
+def test_http_concurrent_downloads_are_deduplicated(
+    multilingual_http_client: Any,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    model_id = "ru_RU-denis-medium"
+    calls = []
+    calls_lock = threading.Lock()
+    first_started = threading.Event()
+    second_started = threading.Event()
+    release_first = threading.Event()
+
+    def fake_urlopen(url: str) -> io.BytesIO:
+        with calls_lock:
+            calls.append(url)
+            call_number = len(calls)
+        if call_number == 1:
+            first_started.set()
+        elif call_number == 2:
+            second_started.set()
+        assert release_first.wait(timeout=5)
+        payload = (
+            b'{"audio":{"sample_rate":22050,"quality":"medium"},'
+            b'"language":{"code":"ru_RU","family":"ru",'
+            b'"name_english":"Russian"},"dataset":"denis",'
+            b'"num_speakers":1,"speaker_id_map":{}}'
+            if ".onnx.json" in url
+            else b"model"
+        )
+        return io.BytesIO(payload)
+
+    monkeypatch.setattr("piper.http_server.download_voice", real_download_voice)
+    monkeypatch.setattr("piper.download_voices.urlopen", fake_urlopen)
+    app = multilingual_http_client.application
+
+    def download_from_client() -> Any:
+        with app.test_client() as client:
+            return client.post("/download", json={"voice": model_id})
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        first = executor.submit(download_from_client)
+        assert first_started.wait(timeout=5)
+        second = executor.submit(download_from_client)
+        time.sleep(0.2)
+        assert not second_started.is_set()
+        release_first.set()
+        first_response = first.result(timeout=5)
+        second_response = second.result(timeout=5)
+
+    assert first_response.status_code == 200
+    assert second_response.status_code == 200
+    assert len(calls) == 2
+    assert (tmp_path / f"{model_id}.onnx").read_bytes() == b"model"
+    assert json.loads((tmp_path / f"{model_id}.onnx.json").read_text())["dataset"] == (
+        "denis"
+    )
+
+    catalog = app.test_client().get("/voice-catalog").get_json()
+    downloaded_voice = next(
+        voice for voice in catalog["voices"] if voice["key"] == model_id
+    )
+    assert downloaded_voice["installed"] is True
+
+    synthesis_response = app.test_client().post(
+        "/synthesize",
+        json={"text": "Привет, как дела?", "mode": "manual", "voice": model_id},
+    )
+    _assert_wav_response(synthesis_response)
+
+
+def test_http_download_failure_opens_circuit_and_fails_fast(
+    multilingual_http_client: Any,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    model_id = "ru_RU-denis-medium"
+    calls = []
+
+    def failing_urlopen(_url: str) -> io.BytesIO:
+        calls.append(_url)
+        raise OSError("upstream unavailable")
+
+    monkeypatch.setattr("piper.http_server.download_voice", real_download_voice)
+    monkeypatch.setattr("piper.download_voices.urlopen", failing_urlopen)
+    app = multilingual_http_client.application
+
+    first_response = app.test_client().post("/download", json={"voice": model_id})
+    assert first_response.status_code == 502
+    assert first_response.get_json()["error"] == "voice_download_upstream_failed"
+    assert first_response.get_json()["retry_after"] > 0
+    assert first_response.headers["Retry-After"] == str(
+        first_response.get_json()["retry_after"]
+    )
+
+    second_response = app.test_client().post("/download", json={"voice": model_id})
+    assert second_response.status_code == 503
+    assert second_response.get_json()["error"] == "voice_download_circuit_open"
+    assert second_response.get_json()["retry_after"] > 0
+    assert len(calls) == 1
+    assert (tmp_path / f".{model_id}.download-state.json").exists()
+
+
+def test_http_download_circuit_recovers_after_single_probe(
+    multilingual_http_client: Any,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    model_id = "ru_RU-denis-medium"
+    monkeypatch.setattr("piper.download_voices.VOICE_DOWNLOAD_COOLDOWN_SECONDS", 0)
+
+    def failing_urlopen(_url: str) -> io.BytesIO:
+        raise OSError("temporary outage")
+
+    monkeypatch.setattr("piper.http_server.download_voice", real_download_voice)
+    monkeypatch.setattr("piper.download_voices.urlopen", failing_urlopen)
+    app = multilingual_http_client.application
+    failed = app.test_client().post("/download", json={"voice": model_id})
+    assert failed.status_code == 502
+
+    def healthy_urlopen(url: str) -> io.BytesIO:
+        payload = (
+            b'{"audio":{"sample_rate":22050,"quality":"medium"},'
+            b'"language":{"code":"ru_RU","family":"ru",'
+            b'"name_english":"Russian"},"dataset":"denis",'
+            b'"num_speakers":1,"speaker_id_map":{}}'
+            if ".onnx.json" in url
+            else b"model"
+        )
+        return io.BytesIO(payload)
+
+    monkeypatch.setattr("piper.download_voices.urlopen", healthy_urlopen)
+    recovered = app.test_client().post("/download", json={"voice": model_id})
+    assert recovered.status_code == 200
+    assert not (tmp_path / f".{model_id}.download-state.json").exists()
+
+
+def test_http_permanent_download_error_does_not_open_circuit(
+    multilingual_http_client: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from urllib.error import HTTPError
+
+    model_id = "ru_RU-denis-medium"
+    calls = 0
+
+    def missing_urlopen(_url: str) -> io.BytesIO:
+        nonlocal calls
+        calls += 1
+        raise HTTPError("https://example.test/voice", 404, "not found", {}, None)
+
+    monkeypatch.setattr("piper.http_server.download_voice", real_download_voice)
+    monkeypatch.setattr("piper.download_voices.urlopen", missing_urlopen)
+    app = multilingual_http_client.application
+
+    first = app.test_client().post("/download", json={"voice": model_id})
+    second = app.test_client().post("/download", json={"voice": model_id})
+    assert first.status_code == 404
+    assert second.status_code == 404
+    assert first.get_json()["error"] == "voice_not_found"
+    assert second.get_json()["error"] == "voice_not_found"
+    assert calls == 2
+
+
 @pytest.mark.parametrize(
     ("model_id", "text"),
     [
@@ -1022,6 +1188,21 @@ def test_http_catalog_analyze_and_synthesis_modes(http_client: Any) -> None:
     )
     assert missing_response.status_code == 409
     assert missing_response.get_json()["error"] == "voice_not_installed"
+
+
+def test_http_does_not_load_model_without_companion_config(
+    http_client: Any, tmp_path: Path
+) -> None:
+    model_id = "vi_VN-vivos-x_low"
+    (tmp_path / f"{model_id}.onnx").write_bytes(b"partial-model")
+
+    response = http_client.post(
+        "/synthesize",
+        json={"text": "Xin chào", "mode": "manual", "voice": model_id},
+    )
+
+    assert response.status_code == 409
+    assert response.get_json()["error"] == "voice_not_installed"
 
 
 def test_http_unified_selection_keeps_explicit_dimensions(http_client: Any) -> None:
