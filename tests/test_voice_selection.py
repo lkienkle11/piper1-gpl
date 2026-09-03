@@ -473,6 +473,54 @@ def test_analyzer_uses_dominant_language_and_short_text_fallback() -> None:
     assert short_result["fallback_reason"] == "text_too_short"
 
 
+@pytest.mark.parametrize(
+    ("text", "family", "code"),
+    [
+        ("Привет, как дела?", "ru", "ru_RU"),
+        ("こんにちは", "ja", "ja_JP"),
+    ],
+)
+def test_analyzer_uses_script_detector_before_low_confidence_fallback(
+    text: str, family: str, code: str
+) -> None:
+    voices = [
+        _catalog_voice("en_GB-cori-high", "en", "en_GB", "cori", "high", True),
+        _catalog_voice(f"{code}-voice-medium", family, code, "voice", "medium", False),
+    ]
+    analyzer = TextAnalyzer()
+    analyzer._get_detector = lambda _families: _FakeDetector("EN", 0.44)
+    script_families: list[set[str]] = []
+
+    def fake_script_detector(families: Iterable[str]) -> _FakeDetector:
+        script_families.append(set(families))
+        return _FakeDetector(family.upper(), 0.44)
+
+    analyzer._get_script_detector = fake_script_detector
+
+    result = analyzer.analyze(text, voices, "en_GB-cori-high")
+
+    assert script_families == [{family}]
+    assert result["language"]["family"] == family
+    assert result["voice"]["key"] == f"{code}-voice-medium"
+    assert result["needs_download"] is True
+    assert result["fallback_reason"] is None
+
+
+def test_analyzer_keeps_low_confidence_fallback_for_ambiguous_latin_text() -> None:
+    voices = [
+        _catalog_voice("en_GB-cori-high", "en", "en_GB", "cori", "high", True),
+        _catalog_voice("fr_FR-voice-medium", "fr", "fr_FR", "voice", "medium", True),
+    ]
+    analyzer = TextAnalyzer()
+    analyzer._get_detector = lambda _families: _FakeDetector("FR", 0.44)
+
+    result = analyzer.analyze("Bonjour?", voices, "en_GB-cori-high")
+
+    assert result["language"]["family"] == "en"
+    assert result["voice"]["key"] == "en_GB-cori-high"
+    assert result["fallback_reason"] == "low_confidence"
+
+
 def test_analyzer_applies_adaptive_segments_and_manual_voice() -> None:
     voices = [
         _catalog_voice("en_US-lessac-medium", "en", "en_US", "lessac", "medium", True),
@@ -755,6 +803,13 @@ def multilingual_http_client(tmp_path: Any, monkeypatch: pytest.MonkeyPatch) -> 
             "quality": "medium",
             "text": "这是中文语音测试。",
         },
+        "ru_RU-denis-medium": {
+            "family": "ru",
+            "code": "ru_RU",
+            "name": "denis",
+            "quality": "medium",
+            "text": "Привет, как дела?",
+        },
     }
     raw_catalog = {
         model_id: {
@@ -878,6 +933,41 @@ def test_http_auto_multilingual_download_then_synthesize(
     )
     _assert_wav_response(synthesis_response)
     assert multilingual_http_client.get("/info").get_json()["last"]["voice"] == model_id
+
+
+def test_http_auto_short_russian_requires_matching_voice_then_synthesizes(
+    multilingual_http_client: Any,
+) -> None:
+    analysis_response = multilingual_http_client.post(
+        "/analyze", json={"text": "Привет, как дела?", "selection": AUTO_SELECTION}
+    )
+    assert analysis_response.status_code == 200
+    analysis = analysis_response.get_json()
+    assert analysis["language"]["family"] == "ru"
+    assert analysis["voice"]["key"] == "ru_RU-denis-medium"
+    assert analysis["needs_download"] is True
+
+    missing_response = multilingual_http_client.post(
+        "/synthesize",
+        json={"text": "Привет, как дела?", "selection": AUTO_SELECTION},
+    )
+    assert missing_response.status_code == 409
+    assert missing_response.get_json()["error"] == "voice_not_installed"
+    assert missing_response.get_json()["voice"]["key"] == "ru_RU-denis-medium"
+
+    download_response = multilingual_http_client.post(
+        "/download", json={"voice": "ru_RU-denis-medium"}
+    )
+    assert download_response.status_code == 200
+
+    synthesis_response = multilingual_http_client.post(
+        "/synthesize",
+        json={"text": "Привет, как дела?", "selection": AUTO_SELECTION},
+    )
+    _assert_wav_response(synthesis_response)
+    assert multilingual_http_client.get("/info").get_json()["last"]["voice"] == (
+        "ru_RU-denis-medium"
+    )
 
 
 @pytest.mark.parametrize(

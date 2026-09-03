@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 import re
+import unicodedata
 from dataclasses import dataclass
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Set, Tuple
 
-from .prosody import ProsodyEvent, ProsodyPlan, ProsodySegment, VoiceCapabilities
 from .linguistic_analysis import LinguisticAnalysis, StanzaLinguisticAnalyzer
+from .prosody import ProsodyEvent, ProsodyPlan, ProsodySegment, VoiceCapabilities
 from .semantic_analysis import ExternalSemanticAnalyzer, SemanticAnalysis
 from .voice_metadata import display_metadata
 
@@ -67,6 +68,26 @@ AUTO_LOCALE_DEFAULTS = {
     "vi": "vi_VN",
 }
 AUTO_VOICE_DEFAULTS = {"en": "en_GB-cori-high"}
+
+SCRIPT_LANGUAGE_FAMILIES: Mapping[str, Set[str]] = {
+    "arabic": {"ar", "fa", "ur"},
+    "armenian": {"hy"},
+    "bengali": {"bn"},
+    "cyrillic": {"bg", "kk", "ru", "sr", "uk"},
+    "devanagari": {"hi", "mr", "ne"},
+    "georgian": {"ka"},
+    "greek": {"el"},
+    "han": {"ja", "zh"},
+    "hangul": {"ko"},
+    "hebrew": {"he"},
+    "kana": {"ja"},
+    "malayalam": {"ml"},
+    "tamil": {"ta"},
+    "telugu": {"te"},
+    "thai": {"th"},
+}
+SCRIPT_DETECTION_MIN_CONFIDENCE = 0.35
+SCRIPT_DETECTION_MIN_MARGIN = 0.10
 
 VOICE_SPEED_PRESETS = {"slow": 0.85, "normal": 1.0, "fast": 1.15}
 CONTEXT_PAUSES = {
@@ -903,8 +924,7 @@ class TextAnalyzer:
     """Lazily detect the dominant language and classify text style."""
 
     def __init__(self) -> None:
-        self._detector: Any = None
-        self._detector_families: Tuple[str, ...] = ()
+        self._detectors: Dict[Tuple[str, ...], Any] = {}
         self._semantic_analyzer: Optional[ExternalSemanticAnalyzer] = None
         self._linguistic_analyzer: Optional[StanzaLinguisticAnalyzer] = (
             StanzaLinguisticAnalyzer()
@@ -923,13 +943,22 @@ class TextAnalyzer:
         self._linguistic_analyzer = analyzer
 
     def _get_detector(self, language_families: Iterable[str]) -> Any:
-        piper_families = set(language_families) | PIPER_LANGUAGE_FAMILIES
+        return self._get_detector_for_families(
+            set(language_families) | PIPER_LANGUAGE_FAMILIES
+        )
+
+    def _get_script_detector(self, language_families: Iterable[str]) -> Any:
+        """Build a detector restricted to languages sharing a text script."""
+        return self._get_detector_for_families(set(language_families))
+
+    def _get_detector_for_families(self, language_families: Set[str]) -> Any:
         detector_families = {
-            DETECTOR_LANGUAGE_ALIASES.get(family, family) for family in piper_families
+            DETECTOR_LANGUAGE_ALIASES.get(family, family)
+            for family in language_families
         }
         families = tuple(sorted(detector_families))
-        if self._detector is not None and families == self._detector_families:
-            return self._detector
+        if families in self._detectors:
+            return self._detectors[families]
 
         from lingua import Language, LanguageDetectorBuilder
 
@@ -942,9 +971,77 @@ class TextAnalyzer:
         if not languages:
             raise ValueError("No supported languages are available for detection")
 
-        self._detector = LanguageDetectorBuilder.from_languages(*languages).build()
-        self._detector_families = families
-        return self._detector
+        detector = LanguageDetectorBuilder.from_languages(*languages).build()
+        self._detectors[families] = detector
+        return detector
+
+    @staticmethod
+    def _text_scripts(text: str) -> Set[str]:
+        """Return non-Latin Unicode scripts represented by alphabetic text."""
+        scripts: Set[str] = set()
+        for char in text:
+            if not unicodedata.category(char).startswith("L"):
+                continue
+            name = unicodedata.name(char, "")
+            if "CJK UNIFIED IDEOGRAPH" in name or "CJK COMPATIBILITY IDEOGRAPH" in name:
+                scripts.add("han")
+            elif "HIRAGANA" in name or "KATAKANA" in name:
+                scripts.add("kana")
+            else:
+                for script in SCRIPT_LANGUAGE_FAMILIES:
+                    if script.upper() in name:
+                        scripts.add(script)
+                        break
+        return scripts
+
+    def _script_language_family(
+        self, text: str, voices: Sequence[Mapping[str, Any]]
+    ) -> Optional[Tuple[str, float]]:
+        """Return a confident language result from script-compatible candidates."""
+        available_families = {
+            str(voice.get("language", {}).get("family", ""))
+            for voice in voices
+            if voice.get("language", {}).get("family")
+        }
+        candidate_families = {
+            family
+            for script in self._text_scripts(text)
+            for family in SCRIPT_LANGUAGE_FAMILIES.get(script, set())
+            if family in available_families
+        }
+        if not candidate_families:
+            return None
+
+        detector = self._get_script_detector(candidate_families)
+        confidence_values = detector.compute_language_confidence_values(text)
+        if not confidence_values:
+            return None
+
+        first_value = confidence_values[0]
+        try:
+            detected_language = first_value.language
+            confidence = float(first_value.value)
+        except AttributeError:
+            detected_language, confidence = first_value
+            confidence = float(confidence)
+        confidence = float(confidence)
+        second_value = confidence_values[1] if len(confidence_values) > 1 else None
+        second_confidence = (
+            float(second_value.value)
+            if second_value is not None and hasattr(second_value, "value")
+            else float(second_value[1]) if second_value is not None else 0.0
+        )
+        if (
+            confidence < SCRIPT_DETECTION_MIN_CONFIDENCE
+            or confidence - second_confidence < SCRIPT_DETECTION_MIN_MARGIN
+        ):
+            return None
+
+        detector_family = detected_language.iso_code_639_1.name.casefold()
+        return (
+            DETECTOR_LANGUAGE_ALIASES_REVERSE.get(detector_family, detector_family),
+            confidence,
+        )
 
     def analyze(
         self,
@@ -1045,8 +1142,12 @@ class TextAnalyzer:
                 )
 
             if confidence < 0.55:
-                language_family = default_family
-                fallback_reason = "low_confidence"
+                script_result = self._script_language_family(narration_text, voices)
+                if script_result is not None:
+                    language_family, confidence = script_result
+                else:
+                    language_family = default_family
+                    fallback_reason = "low_confidence"
 
         detected_emotion, context = classify_text(narration_text, language_family)
         overall_emotion = detected_emotion if emotion_mode == "auto" else emotion_mode
