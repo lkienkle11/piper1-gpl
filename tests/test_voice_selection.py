@@ -1,6 +1,8 @@
 """Tests for automatic text analysis and HTTP voice selection."""
 
+import io
 import json
+import wave
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, Dict, Iterable
@@ -594,6 +596,23 @@ class _FakeVoice:
         yield _FakeChunk()
 
 
+class _MultilingualFakeVoice:
+    def __init__(self, family: str) -> None:
+        self.config = SimpleNamespace(
+            espeak_voice=f"{family}-test",
+            num_speakers=1,
+            speaker_id_map={},
+            default_speaker_id=0,
+            length_scale=1.0,
+            noise_scale=0.667,
+            noise_w_scale=0.8,
+            sample_rate=22050,
+        )
+
+    def synthesize(self, *_args: Any, **_kwargs: Any) -> Iterable[_FakeChunk]:
+        yield _FakeChunk()
+
+
 @pytest.fixture()
 def http_client(tmp_path: Any, monkeypatch: pytest.MonkeyPatch) -> Any:
     model_path = tmp_path / "en_US-lessac-medium.onnx"
@@ -703,6 +722,179 @@ def http_client(tmp_path: Any, monkeypatch: pytest.MonkeyPatch) -> Any:
     )
     app.config["TESTING"] = True
     return app.test_client()
+
+
+@pytest.fixture()
+def multilingual_http_client(tmp_path: Any, monkeypatch: pytest.MonkeyPatch) -> Any:
+    voices = {
+        "en_GB-cori-high": {
+            "family": "en",
+            "code": "en_GB",
+            "name": "cori",
+            "quality": "high",
+            "text": "This is an English voice test.",
+        },
+        "vi_VN-vais1000-medium": {
+            "family": "vi",
+            "code": "vi_VN",
+            "name": "vais1000",
+            "quality": "medium",
+            "text": "Đây là một bài kiểm tra giọng nói tiếng Việt.",
+        },
+        "ja_JP-hi_fi_captain-medium": {
+            "family": "ja",
+            "code": "ja_JP",
+            "name": "hi_fi_captain",
+            "quality": "medium",
+            "text": "これは日本語の音声テストです。",
+        },
+        "zh_CN-chaowen-medium": {
+            "family": "zh",
+            "code": "zh_CN",
+            "name": "chaowen",
+            "quality": "medium",
+            "text": "这是中文语音测试。",
+        },
+    }
+    raw_catalog = {
+        model_id: {
+            "key": model_id,
+            "language": {
+                "code": details["code"],
+                "family": details["family"],
+                "name_english": details["family"],
+            },
+            "name": details["name"],
+            "quality": details["quality"],
+            "num_speakers": 1,
+            "speaker_id_map": {},
+            "files": {"voice.onnx": {"size_bytes": 10}},
+        }
+        for model_id, details in voices.items()
+    }
+
+    def write_voice(model_id: str) -> None:
+        details = voices[model_id]
+        (tmp_path / f"{model_id}.onnx").write_bytes(b"model")
+        (tmp_path / f"{model_id}.onnx.json").write_text(
+            json.dumps(
+                {
+                    "audio": {"sample_rate": 22050, "quality": details["quality"]},
+                    "language": {
+                        "code": details["code"],
+                        "family": details["family"],
+                        "name_english": details["family"],
+                    },
+                    "dataset": details["name"],
+                    "num_speakers": 1,
+                    "speaker_id_map": {},
+                }
+            ),
+            encoding="utf-8",
+        )
+
+    write_voice("en_GB-cori-high")
+    write_voice("vi_VN-vais1000-medium")
+
+    def fake_download(
+        model_id: str, download_dir: Path, *, force_redownload: bool = False
+    ) -> None:
+        del force_redownload
+        assert model_id in voices
+        assert download_dir == tmp_path
+        write_voice(model_id)
+
+    monkeypatch.setattr("piper.http_server.download_voice", fake_download)
+    args = SimpleNamespace(
+        data_dir=[str(tmp_path)],
+        download_dir=str(tmp_path),
+        cuda=False,
+        speaker=0,
+        length_scale=None,
+        noise_scale=None,
+        noise_w_scale=None,
+        sentence_silence=0.0,
+        disable_linguistic=True,
+    )
+    model_path = tmp_path / "en_GB-cori-high.onnx"
+
+    def voice_loader(model_file: Path, **_kwargs: Any) -> _MultilingualFakeVoice:
+        return _MultilingualFakeVoice(voices[model_file.stem]["family"])
+
+    app = create_app(
+        args,
+        model_path,
+        _MultilingualFakeVoice("en"),
+        catalog_fetcher=lambda: raw_catalog,
+        voice_loader=voice_loader,
+    )
+    app.config["TESTING"] = True
+    return app.test_client()
+
+
+AUTO_SELECTION = {
+    "language": "auto",
+    "voice": "auto",
+    "quality": "auto",
+    "speaker": None,
+    "emotion": "auto",
+}
+
+
+def _assert_wav_response(response: Any) -> None:
+    assert response.status_code == 200
+    assert response.mimetype == "audio/wav"
+    assert response.data.startswith(b"RIFF")
+    with wave.open(io.BytesIO(response.data), "rb") as wav_file:
+        assert wav_file.getnframes() > 0
+
+
+@pytest.mark.parametrize(
+    ("model_id", "text"),
+    [
+        ("ja_JP-hi_fi_captain-medium", "これは日本語の音声テストです。"),
+        ("zh_CN-chaowen-medium", "这是中文语音测试。"),
+    ],
+)
+def test_http_auto_multilingual_download_then_synthesize(
+    multilingual_http_client: Any, model_id: str, text: str
+) -> None:
+    before = multilingual_http_client.get("/voice-catalog").get_json()
+    before_voice = next(voice for voice in before["voices"] if voice["key"] == model_id)
+    assert before_voice["installed"] is False
+
+    download_response = multilingual_http_client.post(
+        "/download", json={"voice": model_id}
+    )
+    assert download_response.status_code == 200
+    assert download_response.get_data(as_text=True) == model_id
+
+    after = multilingual_http_client.get("/voice-catalog").get_json()
+    after_voice = next(voice for voice in after["voices"] if voice["key"] == model_id)
+    assert after_voice["installed"] is True
+
+    synthesis_response = multilingual_http_client.post(
+        "/synthesize", json={"text": text, "selection": AUTO_SELECTION}
+    )
+    _assert_wav_response(synthesis_response)
+    assert multilingual_http_client.get("/info").get_json()["last"]["voice"] == model_id
+
+
+@pytest.mark.parametrize(
+    ("model_id", "text"),
+    [
+        ("en_GB-cori-high", "This is an English voice test."),
+        ("vi_VN-vais1000-medium", "Đây là một bài kiểm tra giọng nói tiếng Việt."),
+    ],
+)
+def test_http_auto_existing_multilingual_voices_synthesize(
+    multilingual_http_client: Any, model_id: str, text: str
+) -> None:
+    response = multilingual_http_client.post(
+        "/synthesize", json={"text": text, "selection": AUTO_SELECTION}
+    )
+    _assert_wav_response(response)
+    assert multilingual_http_client.get("/info").get_json()["last"]["voice"] == model_id
 
 
 def test_http_catalog_analyze_and_synthesis_modes(http_client: Any) -> None:

@@ -2,16 +2,11 @@
 
 ## Install from PyPI
 
-Install the HTTP server and local language detector dependencies:
+Install the HTTP server and all language-specific dependencies needed by the
+web UI's Auto Detect flow:
 
 ```sh
-python3 -m pip install 'piper-tts[http]'
-```
-
-Japanese voices use OpenJTalk and require the Japanese language extra:
-
-```sh
-python3 -m pip install 'piper-tts[http,ja]'
+python3 -m pip install 'piper-tts[http,ja,zh]'
 ```
 
 If it is missing, `/synthesize` returns JSON error
@@ -63,7 +58,7 @@ fi
 python3.12 -m venv "${PIPER_TEMP_ROOT}/piper1-gpl-env"
 
 "${PIPER_TEMP_ROOT}/piper1-gpl-env/bin/python" -m pip install --upgrade pip
-"${PIPER_TEMP_ROOT}/piper1-gpl-env/bin/python" -m pip install '.[http,nlp]'
+"${PIPER_TEMP_ROOT}/piper1-gpl-env/bin/python" -m pip install '.[http,ja,zh,nlp]'
 
 # Download the optional Stanza resources used by the five pilot languages.
 PIPER_STANZA_DIR="${PIPER_TEMP_ROOT}/piper1-gpl-stanza"
@@ -99,7 +94,7 @@ python3.12 -m venv .venv
 source .venv/bin/activate
 
 python -m pip install --upgrade pip
-python -m pip install -e '.[http,dev,nlp]'
+python -m pip install -e '.[http,ja,zh,dev,nlp]'
 ./script/dev_build
 
 # Download the optional Stanza resources used by the five pilot languages.
@@ -139,7 +134,7 @@ python3.12 -m venv .venv
 source .venv/bin/activate
 
 python -m pip install --upgrade pip
-python -m pip install -e '.[http,dev,nlp]'
+python -m pip install -e '.[http,ja,zh,dev,nlp]'
 ./script/dev_build
 
 # Download the optional Stanza resources used by the five pilot languages.
