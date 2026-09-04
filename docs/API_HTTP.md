@@ -32,8 +32,16 @@ override it, and `--data-dir <DIR>` to add directories containing voice files.
 The following setups assume that Python 3.12 is installed and that the current
 directory is the root of a Piper source checkout. Choose one setup; do not run
 all three. Each setup downloads `en_GB-cori-high` and serves the web
-interface at [http://127.0.0.1:7860](http://127.0.0.1:7860). The examples use
-the high-quality British English `en_GB-cori-high` voice.
+interface at the configured local port. The examples use the high-quality
+British English `en_GB-cori-high` voice.
+
+### Port configuration
+
+The Piper web interface and HTTP API use the same server port. Each source setup
+below starts with `PIPER_PORT=5000`, so any one setup can be copied independently.
+Port 5000 matches Piper's default and the Docker container port. To use the
+alternate port 7860, change that assignment to `PIPER_PORT=7860` in the setup
+you choose.
 
 Building from source also requires Git and a C/C++ build toolchain. On macOS,
 install the Xcode Command Line Tools. On Linux, install your distribution's C/C++
@@ -50,6 +58,7 @@ checkout. It installs a non-editable snapshot of the source, so run the install
 command again after changing the source code.
 
 ```sh
+PIPER_PORT=5000
 PIPER_TEMP_ROOT=/tmp
 if [ "$(uname -s)" = "Darwin" ]; then
   PIPER_TEMP_ROOT=/private/tmp
@@ -74,14 +83,14 @@ mkdir -p "${PIPER_TEMP_ROOT}/piper1-gpl-voices"
 
 "${PIPER_TEMP_ROOT}/piper1-gpl-env/bin/python" -m piper.http_server \
   --host 127.0.0.1 \
-  --port 7860 \
+  --port "${PIPER_PORT}" \
   --data-dir "${PIPER_TEMP_ROOT}/piper1-gpl-voices" \
   --download-dir "${PIPER_TEMP_ROOT}/piper1-gpl-voices" \
   --linguistic-model-dir "${PIPER_STANZA_DIR}" \
   -m en_GB-cori-high
 ```
 
-Open [http://127.0.0.1:7860](http://127.0.0.1:7860).
+Open `http://127.0.0.1:${PIPER_PORT}`.
 
 ### 2. Project environment and project-local voices
 
@@ -90,6 +99,7 @@ checkout. The ignored `local/voices` directory persists until it is removed
 manually.
 
 ```sh
+PIPER_PORT=5000
 python3.12 -m venv .venv
 source .venv/bin/activate
 
@@ -110,14 +120,14 @@ python -m piper.download_voices \
 
 python -m piper.http_server \
   --host 127.0.0.1 \
-  --port 7860 \
+  --port "${PIPER_PORT}" \
   --data-dir local/voices \
   --download-dir local/voices \
   --linguistic-model-dir "${PIPER_STANZA_DIR}" \
   -m en_GB-cori-high
 ```
 
-Open [http://127.0.0.1:7860](http://127.0.0.1:7860).
+Open `http://127.0.0.1:${PIPER_PORT}`.
 
 ### 3. Project environment and temporary voices (recommended)
 
@@ -125,6 +135,7 @@ This setup keeps the editable development environment in the checkout while
 placing the larger voice files in the operating system's temporary directory.
 
 ```sh
+PIPER_PORT=5000
 PIPER_TEMP_ROOT=/tmp
 if [ "$(uname -s)" = "Darwin" ]; then
   PIPER_TEMP_ROOT=/private/tmp
@@ -150,14 +161,14 @@ python -m piper.download_voices \
 
 python -m piper.http_server \
   --host 127.0.0.1 \
-  --port 7860 \
+  --port "${PIPER_PORT}" \
   --data-dir "${PIPER_TEMP_ROOT}/piper1-gpl-voices" \
   --download-dir "${PIPER_TEMP_ROOT}/piper1-gpl-voices" \
   --linguistic-model-dir "${PIPER_STANZA_DIR}" \
   -m en_GB-cori-high
 ```
 
-Open [http://127.0.0.1:7860](http://127.0.0.1:7860).
+Open `http://127.0.0.1:${PIPER_PORT}`.
 
 The three source setups above install the optional `nlp` extra and download
 Stanza resources for Arabic, English, Japanese, Vietnamese, and Chinese. The
@@ -178,6 +189,13 @@ that already-running endpoint and does not need a second model argument. Piper
 does not download or start the GGUF model, and this setup does not use Ollama.
 See [semantic-benchmark.md](semantic-benchmark.md) for the benchmark runner
 and model evaluation procedure.
+
+## Docker port mapping
+
+The Piper server listens on port 5000 inside the container. Docker port mappings
+use the form `host:container`: keep `5000:5000` for the default, or use
+`7860:5000` when the host should expose port 7860. The right-hand port remains
+5000 because it is the container-side Piper port.
 
 ### Install llama.cpp on each operating system
 
@@ -347,10 +365,11 @@ These reset commands preserve `${PIPER_TEMP_ROOT}/piper1-gpl-voices`,
 ## Web interface
 
 Open [http://localhost:5000](http://localhost:5000) for the PyPI example, or
-[http://127.0.0.1:7860](http://127.0.0.1:7860) for the Linux and macOS source
-setups. The interface has one voice-selection panel. Language, Voice name, and
-Quality each offer `Auto Detect`, so automatic detection can be mixed with
-explicit choices. British English is preferred for English, with
+`http://127.0.0.1:${PIPER_PORT}` for the Linux and macOS source setups after
+setting `PIPER_PORT` in the port configuration section. The interface has one
+voice-selection panel. Language, Voice name, and Quality each offer `Auto Detect`,
+so automatic detection can be mixed with explicit choices. British English is
+preferred for English, with
 `en_GB-cori-high` as the default catalog candidate. English and Vietnamese
 also have local context/emotion rules that adjust synthesis prosody. The
 existing Emotion menu keeps `Auto detect`, `Neutral`, `Happy`, `Sad`, `Angry`,
