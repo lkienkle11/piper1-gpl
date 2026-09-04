@@ -1,5 +1,46 @@
 # HTTP API
 
+## Docker: quick start
+
+If you want to run Piper with Docker, run the four commands below. You do not
+need to create a `.venv`, install Python packages on the host, or mount a host
+directory.
+
+Run the commands from the project root:
+
+```sh
+# 1. Build the image (repeat only when the code or Dockerfile changes)
+docker build -t piper1-gpl:latest .
+
+# 2. Create the Docker-managed volume (run once)
+docker volume create piper-data
+
+# 3. Download a voice into the volume (run once per voice)
+docker run --rm \
+  --mount type=volume,source=piper-data,target=/data \
+  piper1-gpl:latest download en_GB-cori-high
+
+# 4. Start the server
+docker run --name piper-server --rm \
+  --mount type=volume,source=piper-data,target=/data \
+  --publish 5000:5000 \
+  piper1-gpl:latest server --model en_GB-cori-high
+```
+
+Keep command 4 running, then open:
+
+```text
+http://localhost:5000
+```
+
+To stop the server, press `Ctrl+C`. To start it again, rerun command 4; the
+voice remains in the `piper-data` volume. `/data` is a private Docker-managed
+storage area, not a directory that you need to create or select on the host.
+
+Replace `en_GB-cori-high` with another voice in both command 3 and command 4
+when needed. The NLP/Stanza profile is optional and is not required for this
+default Docker flow.
+
 ## Install from PyPI
 
 Install the HTTP server and all language-specific dependencies needed by the
@@ -27,7 +68,7 @@ python3 -m piper.http_server -m en_GB-cori-high
 The server listens on port 5000 by default. Use `--host` and `--port` to
 override it, and `--data-dir <DIR>` to add directories containing voice files.
 
-## Run the HTTP server from source on Linux and macOS
+## Run from source without Docker on Linux and macOS
 
 The following setups assume that Python 3.12 is installed and that the current
 directory is the root of a Piper source checkout. Choose one setup; do not run
@@ -39,9 +80,8 @@ British English `en_GB-cori-high` voice.
 
 The Piper web interface and HTTP API use the same server port. Each source setup
 below starts with `PIPER_PORT=5000`, so any one setup can be copied independently.
-Port 5000 matches Piper's default and the Docker container port. To use the
-alternate port 7860, change that assignment to `PIPER_PORT=7860` in the setup
-you choose.
+Port 5000 matches Piper's default and the Docker container port. Choose another
+port only when explicitly configuring both the server and its client mapping.
 
 Building from source also requires Git and a C/C++ build toolchain. On macOS,
 install the Xcode Command Line Tools. On Linux, install your distribution's C/C++
@@ -190,12 +230,109 @@ does not download or start the GGUF model, and this setup does not use Ollama.
 See [semantic-benchmark.md](semantic-benchmark.md) for the benchmark runner
 and model evaluation procedure.
 
-## Docker port mapping
+## Docker: detailed configuration and optional features
 
-The Piper server listens on port 5000 inside the container. Docker port mappings
-use the form `host:container`: keep `5000:5000` for the default, or use
-`7860:5000` when the host should expose port 7860. The right-hand port remains
-5000 because it is the container-side Piper port.
+The quick-start flow at the beginning is sufficient to run the server. This
+section provides additional details about the named volume, NLP profile, and
+semantic provider.
+
+Build the image from the repository root:
+
+```sh
+docker build -t piper1-gpl .
+```
+
+Piper stores downloaded voices, download coordination state, and optional
+linguistic resources in `/data`. Create one Docker-managed named volume and
+reuse it for every Piper command. These commands intentionally do not mount a
+host directory:
+
+```sh
+docker volume create piper-data
+
+docker run --rm \
+  --mount type=volume,source=piper-data,target=/data \
+  piper1-gpl download en_GB-cori-high
+
+docker run --name piper-server --rm \
+  --mount type=volume,source=piper-data,target=/data \
+  --publish 5000:5000 \
+  piper1-gpl server --model en_GB-cori-high
+```
+
+The container-side Piper port is 5000. Docker mappings use `host:container`, so
+`5000:5000` is the documented mapping. The Docker entrypoint passes through
+supported Piper options such as `--port`, `--model`, and semantic-analysis
+options while keeping voice discovery and downloads in `/data`.
+
+### Optional Docker NLP profile
+
+The default image does not install Stanza, PyTorch, or any NLP dependency on the
+host. If linguistic analysis is needed, build a separate image profile; the
+installation remains entirely inside Docker:
+
+```sh
+docker build \
+  --build-arg PIPER_EXTRAS=http,ja,zh,nlp \
+  --tag piper1-gpl:nlp .
+```
+
+Stanza model resources are not baked into the NLP image. Prepare them in the
+same Docker-managed named volume:
+
+```sh
+docker run --rm \
+  --mount type=volume,source=piper-data,target=/data \
+  --entrypoint python \
+  piper1-gpl:nlp -c \
+  'import stanza; [stanza.download(lang, model_dir="/data/stanza") for lang in ("ar", "en", "ja", "vi", "zh")]'
+```
+
+Then pass the existing resource directory option when starting Piper:
+
+```sh
+docker run --name piper-server --rm \
+  --mount type=volume,source=piper-data,target=/data \
+  --publish 5000:5000 \
+  piper1-gpl:nlp server \
+  --linguistic-model-dir /data/stanza \
+  --model en_GB-cori-high
+```
+
+If Stanza resources are absent, the server remains usable with its existing
+local fallback behavior. This optional profile is still a Docker-only install;
+it does not modify the host Python environment or require an external NLP
+service. The semantic provider is also disabled by default and is not bundled
+into either image. When enabled, its `llama.cpp` endpoint must be reachable
+from the container; non-loopback endpoints require the existing explicit
+privacy and external-endpoint options.
+
+Removing and recreating `piper-server` preserves voices and state because the
+same `piper-data` volume can be mounted again. Removing the named volume is a
+separate destructive cleanup operation:
+
+```sh
+docker volume rm piper-data
+```
+
+### Docker HTTP smoke checks
+
+With the server running on port 5000, verify the packaged UI, catalog, analysis,
+download, and synthesis paths:
+
+```sh
+curl -f http://localhost:5000/
+curl -f http://localhost:5000/voice-catalog
+curl -f -X POST -H 'Content-Type: application/json' \
+  -d '{"text":"Xin chào, hôm nay thật tuyệt!"}' \
+  http://localhost:5000/analyze
+curl -f -X POST -H 'Content-Type: application/json' \
+  -d '{"voice":"vi_VN-vais1000-medium"}' \
+  http://localhost:5000/download
+curl -f -X POST -H 'Content-Type: application/json' \
+  -d '{"text":"This is a Docker test."}' \
+  -o test.wav http://localhost:5000/synthesize
+```
 
 ### Install llama.cpp on each operating system
 

@@ -10,10 +10,14 @@ case "${COMMAND}" in
     exec python3 -m piper --data-dir "${DATA_DIR}" "$@"
     ;;
   download)
-    exec python3 -m piper.download_voices --data-dir "${DATA_DIR}" "$@"
+    exec python3 -m piper.download_voices "$@" --download-dir "${DATA_DIR}"
     ;;
   server)
-    exec python3 -m piper.http_server --host 0.0.0.0 --data-dir "${DATA_DIR}" "$@"
+    exec python3 -m piper.http_server \
+      --host 0.0.0.0 \
+      "$@" \
+      --data-dir "${DATA_DIR}" \
+      --download-dir "${DATA_DIR}"
     ;;
   ""|help|-h|--help)
     echo "Usage: <command> [args...]"

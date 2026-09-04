@@ -4,13 +4,14 @@
 !README.md
 !CMakeLists.txt
 !MANIFEST.in
-!src/piper/*.py
-!src/piper/espeakbridge.pyi
-!src/piper/espeakbridge.c
-!src/piper/tashkeel/*.py
-!src/piper/tashkeel/*.json
-!src/piper/tashkeel/model.onnx
-!src/piper/train/__init__.py
+!COPYING
+!licenses/
+!licenses/**
+!src/
+!src/piper/
+!src/piper/**
+src/piper/**/__pycache__/
+src/piper/**/*.pyc
 
 !script/setup
 !script/dev_build
