@@ -1153,6 +1153,18 @@ def test_http_auto_existing_multilingual_voices_synthesize(
     assert multilingual_http_client.get("/info").get_json()["last"]["voice"] == model_id
 
 
+def test_http_serves_favicon_and_declares_it(http_client: Any) -> None:
+    page_response = http_client.get("/")
+    assert page_response.status_code == 200
+    assert b'rel="icon"' in page_response.data
+    assert b'href="/favicon.ico"' in page_response.data
+
+    favicon_response = http_client.get("/favicon.ico")
+    assert favicon_response.status_code == 200
+    assert favicon_response.mimetype in {"image/x-icon", "image/vnd.microsoft.icon"}
+    assert favicon_response.data
+
+
 def test_http_catalog_analyze_and_synthesis_modes(http_client: Any) -> None:
     catalog_response = http_client.get("/voice-catalog")
     assert catalog_response.status_code == 200

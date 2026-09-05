@@ -310,6 +310,11 @@ def create_app(
 
         return None
 
+    @app.route("/favicon.ico", methods=["GET"])
+    def app_favicon() -> Response:
+        """Serve the browser tab icon from the packaged image assets."""
+        return app.send_static_file("favicon.ico")
+
     @app.route("/", methods=["GET"])
     def app_index() -> str:
         """Web page for testing voices in the browser."""
