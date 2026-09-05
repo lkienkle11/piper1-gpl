@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-VALID_COMMANDS=("speak" "download" "server")
+VALID_COMMANDS=("speak" "download" "stanza-download" "server")
 
 DATA_DIR='/data'
 COMMAND="$1"
@@ -11,6 +11,9 @@ case "${COMMAND}" in
     ;;
   download)
     exec python3 -m piper.download_voices "$@" --download-dir "${DATA_DIR}"
+    ;;
+  stanza-download)
+    exec python3 -m piper.stanza_resources "$@" --model-dir "${DATA_DIR}/stanza"
     ;;
   server)
     exec python3 -m piper.http_server \
@@ -24,6 +27,7 @@ case "${COMMAND}" in
     echo "Available commands:"
     echo "  speak        Synthesize audio from text"
     echo "  download     Download voices"
+    echo "  stanza-download  Download Stanza resources"
     echo "  server       Run HTTP server"
     exit 0
     ;;

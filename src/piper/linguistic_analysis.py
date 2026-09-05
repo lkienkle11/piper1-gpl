@@ -8,7 +8,8 @@ import unicodedata
 import re
 from typing import Any, Dict, List, Optional, Tuple
 
-PILOT_LANGUAGES = frozenset({"ar", "en", "ja", "vi", "zh"})
+from .stanza_resources import PILOT_LANGUAGES, processor_packages_for_language
+
 _LANGUAGE_ALIASES = {
     "ar": "ar",
     "en": "en",
@@ -124,8 +125,10 @@ class StanzaLinguisticAnalyzer:
 
             kwargs: Dict[str, Any] = {
                 "lang": language,
-                "processors": "tokenize,mwt,pos,lemma,depparse",
+                "package": None,
+                "processors": processor_packages_for_language(language),
                 "use_gpu": self.use_gpu,
+                "download_method": None,
             }
             if self.model_dir is not None:
                 kwargs["model_dir"] = str(self.model_dir)
@@ -146,7 +149,9 @@ class StanzaLinguisticAnalyzer:
         for sentence in getattr(document, "sentences", ()):
             words = list(getattr(sentence, "words", ()))
             if words:
-                tokens = [StanzaLinguisticAnalyzer._serialize_word(word) for word in words]
+                tokens = [
+                    StanzaLinguisticAnalyzer._serialize_word(word) for word in words
+                ]
             else:
                 tokens = [
                     {"text": str(getattr(token, "text", ""))}
@@ -213,4 +218,6 @@ _CLAUSE_RELATIONS = frozenset(
 
 def _is_punctuation(value: str) -> bool:
     """Return whether a serialized token is Unicode punctuation."""
-    return bool(value) and all(unicodedata.category(char).startswith("P") for char in value)
+    return bool(value) and all(
+        unicodedata.category(char).startswith("P") for char in value
+    )

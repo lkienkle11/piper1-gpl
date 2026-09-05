@@ -1,43 +1,43 @@
 ## Why
 
-The Docker image and build context predate the current Piper web runtime. Recent
-multilingual Auto Detect, voice catalog, Stanza analysis, and concurrent voice
-download changes are not fully represented in the image, while the current
-entrypoint can leave downloaded artifacts outside the intended persistent data
-location. This change is needed now so the container runs the same supported web
-runtime as the source installation with predictable persistence.
+The source setup instructions install and configure Stanza, while the Docker
+runtime currently treats NLP as a separate optional profile. This creates two
+different supported runtimes, and the shared linguistic analyzer also requests
+the mwt processor for languages whose resources do not provide it. The change
+is needed to make host and Docker behavior equivalent while reducing avoidable
+PyTorch and Stanza model footprint.
 
 ## What Changes
 
-- Reconcile the multi-stage Docker build with the current package metadata and
-  install the default web runtime extras required by the current HTTP
-  experience: `http`, `ja`, and `zh`.
-- Provide an explicit Docker-only `nlp` build profile for users who need Stanza;
-  this profile may be large, but it SHALL not require installing dependencies on
-  the host or connecting to an external NLP service.
-- Expand the Docker build context to include all package assets required by the
-  current wheel, including web templates and images, the voice catalog, language
-  data, and license/source files.
-- Make `/data` the sole persistent runtime location for downloaded voices,
-  per-voice download locks, circuit-breaker state, and optional linguistic
-  resources.
-- Enforce an explicit `/data` download directory in the Docker entrypoint so
-  voice downloads cannot default to the container work directory.
-- Declare and document a Docker-managed named volume workflow; do not require or
-  document host bind mounts for runtime data.
-- Keep port 5000 as the container's default HTTP port and preserve passthrough of
-  the existing `--port` override. Host port remapping remains optional.
-- Document the Docker build, named-volume lifecycle, voice download, server
-  startup, optional Stanza resource setup, and HTTP smoke checks.
-- Validate package contents, container startup, HTTP endpoints, and data
-  persistence across container recreation.
+- Make the standard Docker runtime include the same HTTP, multilingual, and
+  Stanza capabilities used by the supported source setup.
+- Install a CPU-only PyTorch runtime for Docker so the image does not pull an
+  unnecessary CUDA/NVIDIA dependency tree.
+- Keep Stanza model weights outside the image in the Docker-managed named
+  volume under /data/stanza.
+- Add one shared language-to-processor definition and resource preparation
+  flow used by both host and Docker execution.
+- Download only the processors required by each supported language instead of
+  downloading every default Stanza package component.
+- Stop forcing mwt for languages whose Stanza resources do not support it,
+  while preserving the existing analysis response and fallback behavior.
+- Update Docker and source documentation so both flows expose the same NLP
+  behavior, with only their storage paths differing.
+- Make the Docker quick-start flow self-contained by including the one-time
+  Stanza preparation step and the `/data/stanza` server option before the
+  first `/analyze` request.
+- Add host and container tests for resource preparation, five-language Stanza
+  analysis, missing-resource fallback, and Docker image footprint constraints.
+- Preserve port 5000, the Docker-managed /data volume contract, voice download
+  coordination, and the existing semantic-provider boundary.
 
 ## Capabilities
 
 ### New Capabilities
 
-- `docker-runtime-packaging`: Defines the dependency, asset, port, storage, and
-  operational contract for running the current Piper HTTP runtime in Docker.
+- docker-runtime-packaging: Defines the unified Docker and host linguistic
+  runtime, optimized Stanza resource flow, package assets, port, and persistent
+  storage contract.
 
 ### Modified Capabilities
 
@@ -45,11 +45,11 @@ None.
 
 ## Impact
 
-- Docker build and runtime files: `Dockerfile`, `.dockerignore`, and
-  `docker/entrypoint.sh`.
-- HTTP deployment documentation in `docs/API_HTTP.md`.
-- Runtime dependencies declared by `setup.py` and the packaged wheel contents.
-- Container storage behavior for voice files, download coordination metadata, and
-  optional Stanza resources.
-- Build and container smoke-test procedures; no HTTP request schema or core
-  synthesis behavior changes are intended.
+- Docker runtime files: Dockerfile, .dockerignore, and docker/entrypoint.sh.
+- Shared linguistic analysis and Stanza resource preparation code under
+  src/piper/.
+- Package dependency resolution in setup.py and the Docker build.
+- Host and Docker sections of docs/API_HTTP.md, including the copyable Docker
+  quick-start sequence.
+- Unit, integration, and container validation for linguistic analysis and
+  runtime parity.

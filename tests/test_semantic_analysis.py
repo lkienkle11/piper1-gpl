@@ -4,6 +4,7 @@ import io
 import json
 import sys
 import time
+from pathlib import Path
 
 import pytest
 
@@ -94,6 +95,52 @@ def test_stanza_analyzer_normalizes_languages_and_caches_pipeline(
     assert all_languages == {"ar", "zh", "en", "ja", "vi"}
     assert len(pipeline_calls) == 5
     assert pipeline_calls[0]["lang"] == "en"
+    assert pipeline_calls[0]["download_method"] is None
+    processors_by_language = {
+        call["lang"]: call["processors"] for call in pipeline_calls
+    }
+    assert processors_by_language["en"] == {
+        "tokenize": "combined_nocharlm",
+        "mwt": "combined",
+        "pos": "combined_nocharlm",
+        "lemma": "combined_nocharlm",
+        "depparse": "combined_nocharlm",
+    }
+    assert processors_by_language["vi"] == {
+        "tokenize": "vtb",
+        "pos": "vtb_nocharlm",
+        "lemma": "identity",
+        "depparse": "vtb_nocharlm",
+    }
+
+
+def test_stanza_resource_download_uses_selected_language_processors(
+    tmp_path: Path,
+) -> None:
+    from piper.stanza_resources import download_resources
+
+    calls = []
+
+    class FakeStanza:
+        @staticmethod
+        def download(language: str, **kwargs: object) -> None:
+            calls.append((language, kwargs))
+
+    download_resources(tmp_path, ("vi", "en", "vi"), stanza_module=FakeStanza)
+
+    assert [language for language, _kwargs in calls] == ["vi", "en"]
+    assert calls[0][1]["processors"] == {
+        "tokenize": "vtb",
+        "pos": "vtb_nocharlm",
+        "depparse": "vtb_nocharlm",
+    }
+    assert calls[1][1]["processors"] == {
+        "tokenize": "combined_nocharlm",
+        "mwt": "combined",
+        "pos": "combined_nocharlm",
+        "lemma": "combined_nocharlm",
+        "depparse": "combined_nocharlm",
+    }
 
 
 def test_stanza_analyzer_falls_back_when_resources_are_unavailable(
@@ -223,7 +270,9 @@ def test_provider_result_is_validated_and_returned() -> None:
 
 
 def test_provider_rejects_malformed_output() -> None:
-    analyzer = ExternalSemanticAnalyzer(lambda _text, _language: {"emotion": "dramatic"})
+    analyzer = ExternalSemanticAnalyzer(
+        lambda _text, _language: {"emotion": "dramatic"}
+    )
 
     result = analyzer.analyze("Text", "en")
 
@@ -259,7 +308,5 @@ def test_provider_is_opt_in_and_bounds_input_before_call() -> None:
     bounded = ExternalSemanticAnalyzer(provider, max_text_length=4)
 
     assert disabled.analyze("Text", "en").unavailable == ("provider_disabled",)
-    assert bounded.analyze("Too long", "en").unavailable == (
-        "provider_text_too_long",
-    )
+    assert bounded.analyze("Too long", "en").unavailable == ("provider_text_too_long",)
     assert calls == []

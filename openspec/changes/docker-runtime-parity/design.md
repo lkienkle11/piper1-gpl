@@ -1,131 +1,147 @@
 ## Context
 
-See `proposal.md` for the motivation. The current Dockerfile builds a wheel from
-an allowlisted context, installs only Flask in the final image, and exposes port
-5000. The package metadata now includes multilingual HTTP extras, Stanza support,
-voice catalog and web assets, Hebrew data, and `filelock`. The server and download
-paths also now persist per-voice lock and circuit-breaker files beside voice
-artifacts.
+The source setup blocks install the nlp extra, download Stanza resources, and
+start the server with the linguistic model directory option. The Docker
+quick-start currently builds the image, creates the named volume, downloads a
+voice, and starts the server, but leaves Stanza preparation and the linguistic
+model directory option to a later detailed section. The Dockerfile currently
+keeps that extra out of the default image and documents a separate NLP profile.
+The shared analyzer currently hard-codes
+tokenize,mwt,pos,lemma,depparse, although the Vietnamese resource downloaded
+by Stanza does not contain an mwt model.
+
+The existing Docker storage contract remains valid: voices, coordination state,
+and linguistic resources belong in one Docker-managed named volume mounted at
+/data. The source environment may use its existing local or temporary paths;
+parity means the runtime behavior and resource selection are shared, not that
+host paths are reused by Docker.
 
 ## Goals / Non-Goals
 
 **Goals:**
 
-- Make the default image's installed runtime match the current multilingual HTTP
-  setup without pulling the optional NLP dependency tree.
-- Provide an explicit Docker-only NLP profile for Stanza users.
-- Produce a wheel containing every asset required by the HTTP application and
-  package metadata.
-- Make `/data` the only runtime data location and provide a named-volume-first
-  deployment flow.
-- Keep port 5000 as the container default while preserving existing CLI argument
-  passthrough.
-- Make optional Stanza resources usable from the named volume without bundling
-  large model resources into the image.
+- Make the standard Docker image provide the same Stanza capability as the
+  supported source installation.
+- Avoid CUDA/NVIDIA packages in the CPU Docker runtime.
+- Keep large Stanza model weights out of the image and persist them in
+  /data/stanza.
+- Use one language-to-processor mapping for model preparation and pipeline
+  loading on both host and Docker.
+- Make the copyable Docker quick-start sequence prepare Stanza resources before
+  starting the server, so its first analysis request exercises the standard
+  NLP-enabled flow.
+- Download only the processor models required by the supported analysis output.
+- Keep missing-resource fallback, port 5000, named-volume persistence, and
+  existing HTTP schemas stable.
 
 **Non-Goals:**
 
-- Do not change the HTTP request or response schema, voice selection behavior,
-  synthesis algorithms, or download circuit-breaker logic.
+- Do not change the /analyze request or response schema.
 - Do not bake voice models, Stanza model weights, GGUF files, or llama.cpp into
   the Piper image.
-- Do not introduce host bind mounts, a database, Redis, or another external
-  coordination service for voice downloads.
-- Do not remove the application's existing arbitrary `--port` override or make
-  another port the container default.
+- Do not require host bind mounts for Docker runtime data.
+- Do not add automatic network downloads during synthesis or analysis requests.
+- Do not introduce a separate Docker-only linguistic implementation.
+- Do not change acoustic models or basic Vietnamese, Japanese, or Chinese
+  synthesis behavior.
 
 ## Decisions
 
-### Install the local wheel with default web extras and an optional NLP profile
+### Use one standard NLP-enabled Docker runtime
 
-The builder will retain the existing source-to-wheel flow. The final stage will
-install the local wheel with the default `http`, `ja`, and `zh` extras. A Docker
-build argument will allow an explicit NLP profile to add `nlp` to that local
-wheel installation, for example `http,ja,zh,nlp`. This keeps dependency versions
-owned by `setup.py` and ensures that the final image does not silently resolve a
-different package from PyPI. Development and training extras stay in the
-builder only or are omitted from every runtime image.
+The final Docker image will install the runtime extras required by the current
+source setup, including nlp. The image build will install a CPU-only PyTorch
+distribution or equivalent platform constraint and will fail validation if it
+resolves the CUDA/NVIDIA runtime tree.
 
-Installing only Flask is rejected because it leaves the current Auto Detect
-multilingual path without its phonemizers and language detector. Installing
-`nlp` in the default image is also rejected because Stanza currently resolves a
-large CUDA-enabled PyTorch dependency tree on the target ARM64 build platform,
-despite NLP resources being optional for the HTTP runtime. Copying a developer
-virtual environment into the final stage is rejected because it would carry
-build tools and unrelated development packages.
+Keeping NLP in a separate optional image is rejected because it leaves the
+documented Docker runtime behavior different from the source behavior. Pulling
+the default PyTorch distribution is rejected because it caused a large
+CUDA-enabled dependency tree on the target ARM64 build. The exact CPU wheel
+selection must be validated on the supported Python and Docker platforms.
 
-### Make the Docker context follow package metadata
+### Share the processor mapping between preparation and analysis
 
-The allowlist in `.dockerignore` will be updated to retain the source directories
-and root license files that `setup.py` enumerates. The Dockerfile will copy those
-files into the builder, while generated `espeak-ng-data` remains produced by the
-existing CMake build. The wheel will be inspected after packaging so missing
-templates, catalog data, nested language packages, or license files fail
-validation before runtime testing.
+Introduce a small shared resource definition in the Piper Python package. It
+will define the supported pilot languages and the processors required for each
+language. The resource preparation command and StanzaLinguisticAnalyzer will
+both consume this definition.
 
-### Use an explicit named-volume contract at `/data`
+The mapping will include mwt only for languages whose Stanza resources expose
+and require that processor. Vietnamese and any other language without a usable
+mwt model will use the remaining processors needed by the serialized output.
+The implementation will verify the mapping against installed Stanza resource
+metadata rather than assuming every language has the same pipeline.
 
-The image will declare `/data` as its data volume, and the entrypoint will pass an
-explicit `/data` download directory for both the download and server commands.
-This avoids the current argparse interaction where the process working directory
-can remain the first data directory and become the implicit download destination.
+This is preferred over duplicating processor strings in shell snippets and
+analysis code because duplicated lists already caused the Docker/source
+resource flow and runtime pipeline to diverge.
 
-The documented lifecycle will create a named volume such as `piper-data`, mount
-it at `/data`, download voices into it, and reuse it when starting or recreating
-the server container. A host bind mount is not included in examples or required
-for operation. Stanza resources, when prepared, will use `/data/stanza` on the
-same volume so they follow the same persistence rule.
+### Provide one explicit resource-preparation interface
 
-### Keep the internal HTTP port at 5000
+The package will expose a Python resource-preparation command that accepts a
+model directory and an optional language selection. Host documentation will
+invoke it directly. The Docker entrypoint will delegate to the same command
+with /data/stanza as its model directory.
 
-The entrypoint will continue to bind the server to `0.0.0.0` and pass user
-arguments through. Documentation will use `5000:5000` as the mapping; custom
-host mappings remain possible when paired with the existing `--port` option.
+Resources will be downloaded explicitly before server startup and will never be
+downloaded as a side effect of /analyze, /synthesize, or ordinary voice
+download requests. The default language selection may cover the five supported
+pilot languages, while a language selection can avoid downloading unused model
+sets.
 
-### Keep optional services outside the image
+The Docker quick-start will call this interface as a one-time volume setup step
+and will start the server with `/data/stanza` explicitly configured. The
+detailed Docker section may explain the same commands further, but it will not
+be the only place where the complete NLP flow is documented.
 
-Stanza Python support will be installed only in the explicit NLP image profile,
-and its resources will be prepared into `/data/stanza` rather than downloaded
-during ordinary synthesis. The default image does not require Stanza and uses
-the existing fallback. The semantic provider remains disabled by default and
-connects only to a separately managed `llama.cpp` endpoint. Docker documentation
-will explain that an endpoint running outside the Piper container must be
-reachable from the container and must use the existing explicit
-privacy/external-endpoint flags.
+### Keep model weights in the named volume
 
-Embedding these services is rejected because their model sizes, accelerator
-requirements, lifecycle, and privacy boundaries differ from the Piper HTTP
-runtime.
+The image will contain the Stanza Python runtime but not language model weights.
+The documented Docker flow will create or reuse piper-data, prepare models at
+/data/stanza, and start the server with the linguistic model directory option.
+Removing and recreating the container will preserve the models; deleting the
+volume remains an explicit destructive operation.
+
+### Preserve fallback and API compatibility
+
+If Stanza is unavailable or a requested language resource is incomplete, the
+analyzer will return the existing local fallback status rather than preventing
+basic speech synthesis. When the shared processor set and resources are
+complete, /analyze will report Stanza as its source for the supported language.
+Existing serialized fields remain stable; fields that depend on an unavailable
+processor remain absent according to current serialization rules.
 
 ## Risks / Trade-offs
 
-- **Larger optional NLP image:** Stanza may resolve a CUDA-enabled PyTorch tree.
-  Keep it out of the default image, make the profile explicit, and do not bake
-  model resources into either image.
-- **Native dependency compatibility:** Optional phonemizer wheels may vary by
-  Python/platform. Build and synthesis smoke tests must run against the target
-  Python 3.12 image.
-- **Missing Stanza resources:** Installing the package does not provide its
-  models. Document the explicit volume-backed preparation flow and preserve the
-  existing fallback when resources are absent.
-- **Container-to-semantic-service networking:** A loopback endpoint inside the
-  Piper container is not the host or another container. Document reachable
-  endpoint configuration and retain the privacy policy instead of weakening it.
-- **Volume deletion is destructive:** Recreating a container is safe, but removing
-  the named volume removes downloaded voices and metadata. Mark volume removal as
-  an explicit destructive cleanup operation in the documentation.
+- **CPU wheel availability** -> Validate the selected CPU-only PyTorch
+  distribution on Python 3.12 and the target Docker architecture; fail the
+  image check if CUDA packages appear.
+- **NLP image remains larger than the base image** -> Keep model weights in the
+  named volume, download only selected languages/processors, and measure image
+  and volume contents separately.
+- **Stanza resource metadata can change** -> Validate processor mappings against
+  downloaded resource metadata and test all supported pilot languages.
+- **Processor differences can change analysis detail** -> Preserve the existing
+  JSON contract, test token/lemma/POS/dependency fields where available, and
+  retain local fallback for incomplete resources.
+- **Resource download requires network access during preparation** -> Make the
+  preparation step explicit and repeatable; server and synthesis remain usable
+  from prepared volume data without a network dependency.
 
 ## Migration Plan
 
-1. Build the updated image and create a new named volume, or reuse an existing
-   volume after verifying its contents.
-2. Download or copy voices through the Docker command into `/data`; do not bake
-   them into the image.
-3. Optionally prepare Stanza resources under `/data/stanza` and start the server
-   with the linguistic model directory option.
-4. Start the server with `5000:5000`, then verify the UI and HTTP smoke endpoints.
-5. Roll back by running the previous image with its own named volume; the image
-   change does not modify the host filesystem or the existing application data.
+1. Build the unified image with the CPU-only NLP dependency constraint.
+2. Create or reuse the Docker-managed piper-data volume.
+3. Run the shared Stanza resource-preparation command for required languages,
+   storing models under /data/stanza.
+4. Download the required voice into the same named volume.
+5. Start the server on 5000:5000 with /data mounted and the linguistic model
+   directory set to /data/stanza.
+6. Verify /analyze, /synthesize, UI, catalog, download persistence, and
+   fallback behavior.
+7. Roll back by using the previous image and its existing named volume; do not
+   delete the volume during rollback.
 
 ## Open Questions
 

@@ -1,128 +1,178 @@
 ## Purpose
 
-This capability defines a reproducible Docker runtime for the current Piper HTTP
-application, including its multilingual web dependencies, packaged assets, port,
-and persistent voice-download storage contract.
+This capability defines one optimized linguistic runtime contract for Piper on
+the host and in Docker, including Stanza dependencies, processor-specific
+resource preparation, HTTP behavior, and Docker-managed persistence.
 
 ## ADDED Requirements
 
-### Requirement: Container provides the current multilingual HTTP runtime
+### Requirement: Standard runtime provides the supported linguistic capability
 
-The default Docker image SHALL install the local Piper package with the runtime
-dependencies required by the current multilingual web application, including
-HTTP support and the supported Japanese and Chinese extras. The default image
-SHALL not require development, training, linguistic-analysis, or external
-services to start the HTTP server. An explicit Docker NLP profile SHALL be
-available for users who want the optional Stanza analysis package.
+The standard Docker runtime SHALL provide the same supported Stanza linguistic
+analysis capability as the supported source installation. The Docker runtime
+SHALL use a CPU execution dependency set without requiring CUDA or NVIDIA
+runtime packages. Basic voice synthesis SHALL remain usable when linguistic
+resources are absent.
 
-#### Scenario: Japanese and Chinese web synthesis are available
+#### Scenario: Standard Docker image contains the linguistic runtime
 
-- **WHEN** the image is run with a corresponding voice model available in its
-  data volume and a client submits a valid synthesis request for Japanese or
-  Chinese text
-- **THEN** the server SHALL reach the voice phonemizer and return playable WAV
-  audio instead of failing because the web image omitted the language extra
+- **WHEN** the standard Docker image is built and its runtime dependencies are
+  inspected
+- **THEN** Stanza and its CPU-compatible execution dependency SHALL be
+  available without requiring a separate NLP image or host installation
 
-#### Scenario: Default image runs without NLP resources
+#### Scenario: Standard image does not pull accelerator runtime packages
 
-- **WHEN** the default image is started without an NLP profile or pre-installed
-  Stanza resources
-- **THEN** the server SHALL remain able to serve the HTTP application and use its
-  existing local analysis fallback without requiring host-installed packages or
-  downloading resources as part of a normal synthesis request
+- **WHEN** the built image dependency set is inspected
+- **THEN** it SHALL not contain CUDA/NVIDIA runtime packages used only for
+  accelerator execution
 
-#### Scenario: NLP profile is selected during Docker build
+#### Scenario: Synthesis remains available without linguistic resources
 
-- **WHEN** a user explicitly builds the Docker NLP profile
-- **THEN** the resulting image SHALL contain the declared linguistic-analysis
-  package and SHALL remain self-contained, with no dependency installation on
-  the host and no required external NLP service
+- **WHEN** the standard image starts with a voice in /data but no Stanza model
+  resources
+- **THEN** the HTTP server and basic speech synthesis SHALL remain available
+  and linguistic analysis SHALL report the existing local fallback status
 
-### Requirement: Image contains the HTTP package assets
+### Requirement: Host and Docker use one processor-aware Stanza flow
 
-The Docker-built wheel SHALL contain the web templates and images, the current
-voice catalog metadata, language-specific packaged data, and required license or
-source files declared by the package metadata.
+The host and Docker runtimes SHALL use the same supported-language processor
+definition for Stanza resource preparation and pipeline loading. The flow SHALL
+allow a caller to select languages and SHALL download only the processors
+required for those languages rather than every default package component.
 
-#### Scenario: Web UI and catalog are served from the image
+#### Scenario: Resource preparation uses the shared processor definition
 
-- **WHEN** a container starts the HTTP server from the Docker-built wheel
-- **THEN** the root web page, static image routes, and normalized voice catalog
-  endpoint SHALL be available without source files mounted from the host
+- **WHEN** a caller prepares resources for a supported language
+- **THEN** the preparation command SHALL request the processor set defined for
+  that language and SHALL place the resulting files under the requested model
+  directory
 
-### Requirement: Runtime data uses one Docker-managed named volume
+#### Scenario: Unused languages are not downloaded
 
-The Docker deployment SHALL use `/data` as the persistent runtime directory for
-downloaded voice artifacts, per-voice download locks, circuit-breaker state, and
-any optional linguistic resources. The documented deployment SHALL use a
-Docker-managed named volume and SHALL NOT require a host bind mount.
+- **WHEN** a caller selects a subset of supported languages
+- **THEN** the preparation flow SHALL not create model directories for
+  unselected languages
 
-#### Scenario: Voice download persists across container recreation
+#### Scenario: Host and Docker select equivalent processors
 
-- **WHEN** a voice is downloaded using a named volume mounted at `/data`, the
-  container is removed, and a new container mounts the same named volume
-- **THEN** the complete model and configuration files SHALL remain available to
-  the new container
+- **WHEN** the same language selection is prepared on the host and in Docker
+- **THEN** both runtimes SHALL use the same processor mapping, with only the
+  model directory path differing
 
-#### Scenario: Concurrent download coordination shares the volume
+### Requirement: Linguistic analysis handles language-specific resources
 
-- **WHEN** concurrent server requests download the same voice using the same
-  `/data` directory
-- **THEN** the lock and circuit-breaker metadata SHALL be stored beside the voice
-  artifacts on that shared filesystem and the requests SHALL observe the current
-  download coordination behavior
+The linguistic analyzer SHALL load only processors available and required for
+the requested supported language. It SHALL NOT force mwt or another unsupported
+processor for a language whose installed Stanza resources do not provide it.
 
-#### Scenario: Docker commands do not depend on host paths
+#### Scenario: Vietnamese analysis does not require an unavailable MWT model
 
-- **WHEN** a user follows the documented build and run flow on a Docker host
-- **THEN** the commands SHALL create or reuse a named volume and SHALL not require
-  a repository path or other host directory to be mounted at `/data`
+- **WHEN** Vietnamese resources contain the supported Vietnamese processors but
+  no mwt model and a client calls /analyze
+- **THEN** the analyzer SHALL run with the compatible processor set and SHALL
+  return a Stanza-backed result instead of failing during pipeline creation
 
-### Requirement: Container port and command contract are stable
+#### Scenario: Complete resources produce Stanza analysis
 
-The HTTP server SHALL listen on port 5000 inside the container by default. The
-Docker entrypoint SHALL direct both voice discovery and voice downloads to
-`/data`, and SHALL continue to pass supported server and synthesis arguments
-through to Piper.
+- **WHEN** a supported language has all processors defined for that language
+  under the configured model directory
+- **THEN** /analyze SHALL return source equal to stanza and include the stable
+  serialized linguistic fields available from that pipeline
 
-#### Scenario: Default server mapping uses port 5000
+#### Scenario: Incomplete resources preserve fallback
 
-- **WHEN** a user starts the container with the default server command and maps
-  host port 5000 to container port 5000
-- **THEN** the web UI and HTTP API SHALL be reachable on the host through port
-  5000
+- **WHEN** a requested language is supported but its required resources are
+  missing or cannot be loaded
+- **THEN** /analyze SHALL return the existing local fallback status without
+  downloading resources or preventing speech synthesis
+
+### Requirement: Linguistic resources use the Docker-managed volume
+
+The Docker runtime SHALL keep Stanza model weights outside the image in
+/data/stanza on the same Docker-managed named volume used for voices and runtime
+state. Docker operation SHALL NOT require a host bind mount.
+
+#### Scenario: Docker preparation persists Stanza resources
+
+- **WHEN** the documented preparation command runs with piper-data mounted at
+  /data
+- **THEN** the selected resources SHALL be stored under /data/stanza and SHALL
+  remain available after the preparation container exits
+
+#### Scenario: Container recreation reuses Stanza resources
+
+- **WHEN** a server container is removed and recreated with the same named
+  volume
+- **THEN** the server SHALL reuse /data/stanza without downloading the models
+  again
+
+#### Scenario: Model weights are not baked into the image
+
+- **WHEN** the Docker image filesystem is inspected before mounting a data
+  volume
+- **THEN** it SHALL contain the Stanza runtime but SHALL not contain language
+  model weights
+
+### Requirement: HTTP and storage contracts remain stable
+
+The unified runtime SHALL keep the HTTP server on container port 5000 by
+default, SHALL preserve the existing port override, and SHALL keep voices,
+download coordination state, and linguistic resources under /data.
+
+#### Scenario: Default Docker mapping remains port 5000
+
+- **WHEN** a user starts the standard image with 5000:5000 and a named volume
+- **THEN** the web UI, /analyze, and /synthesize SHALL be reachable through host
+  port 5000
 
 #### Scenario: Custom port override remains supported
 
-- **WHEN** a user passes the existing `--port` option through the Docker
+- **WHEN** a user passes the existing --port option through the Docker
   entrypoint
-- **THEN** the server SHALL listen on the requested container port and the user
-  SHALL be able to choose a matching host mapping
+- **THEN** the server SHALL listen on the requested container port and accept a
+  matching host mapping
 
-#### Scenario: Download and server use the same persistent directory
+#### Scenario: Voice synthesis is unaffected by Stanza preparation
 
-- **WHEN** a user downloads a voice with the Docker download command and then
-  starts the Docker server against the same named volume
-- **THEN** the server SHALL discover the downloaded voice from `/data` without
-  relying on files in the image work directory
+- **WHEN** a voice is downloaded into /data and the server is started with or
+  without prepared Stanza resources
+- **THEN** valid synthesis requests SHALL continue to return playable WAV audio
 
-### Requirement: Docker deployment documents optional linguistic and semantic services
+### Requirement: Documentation exposes one complete host and Docker flow
 
-The Docker deployment documentation SHALL explain how to place optional Stanza
-resources under `/data/stanza` using the named volume, and SHALL state that a
-semantic `llama.cpp` service and its model are separate from the Piper image.
+The deployment documentation SHALL show the same Stanza installation,
+processor-aware preparation, and analysis behavior for host and Docker. The
+copyable Docker quick-start SHALL be a complete standard NLP-enabled flow: it
+SHALL include Stanza preparation in the named volume before server startup and
+SHALL pass `/data/stanza` to the server's linguistic model directory option.
+Docker examples SHALL use the named volume at /data, SHALL not require a host
+bind mount, and SHALL explain that resource preparation is explicit.
 
-#### Scenario: Optional Stanza resources are reused
+#### Scenario: Docker documentation shows the unified NLP flow
 
-- **WHEN** the NLP profile is used, Stanza resources are prepared in
-  `/data/stanza`, and the server is started with the existing linguistic model
-  directory option
-- **THEN** the container SHALL use those resources without requiring a host bind
-  mount
+- **WHEN** a user follows the Docker section
+- **THEN** the quick-start SHALL show the standard image build, named-volume
+  creation, voice download, resource preparation under /data/stanza, server
+  startup on port 5000 with `/data/stanza` configured, and an /analyze
+  verification request
 
-#### Scenario: Semantic provider is enabled explicitly
+#### Scenario: Docker quick-start reaches Stanza-backed analysis
 
-- **WHEN** a user enables the semantic provider for a container deployment
-- **THEN** the documentation SHALL require an endpoint reachable from the
-  container and preserve the existing explicit privacy and external-endpoint
-  policy
+- **WHEN** a user follows the copyable Docker quick-start with its named volume
+  and completes the documented Stanza preparation step
+- **THEN** the subsequent /analyze verification request SHALL report a
+  Stanza-backed result, while synthesis SHALL remain available from the same
+  container
+
+#### Scenario: Source documentation uses the same preparation interface
+
+- **WHEN** a user follows any supported source setup
+- **THEN** it SHALL use the same processor-aware resource preparation interface
+  with a host-local model directory
+
+#### Scenario: Documentation distinguishes fallback from successful Stanza
+
+- **WHEN** resources are absent or incomplete
+- **THEN** the documentation SHALL state that the server remains usable through
+  local fallback and SHALL distinguish that from a Stanza-backed result

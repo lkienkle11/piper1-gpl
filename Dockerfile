@@ -22,11 +22,13 @@ ENV PIP_BREAK_SYSTEM_PACKAGES=1
 
 WORKDIR /app
 COPY --from=builder /app/dist/piper_tts-*.whl /tmp/
-# The default image stays small enough for HTTP serving. Build with
-# PIPER_EXTRAS=http,ja,zh,nlp for the optional Docker-only NLP profile.
-ARG PIPER_EXTRAS="http,ja,zh"
-RUN wheel="$(find /tmp -maxdepth 1 -name 'piper_tts-*.whl' -print -quit)" && \
-    pip3 install --no-cache-dir "piper-tts[${PIPER_EXTRAS}] @ file://${wheel}" && \
+ARG TORCH_INDEX_URL="https://download.pytorch.org/whl/cpu"
+RUN pip3 install --no-cache-dir \
+      --index-url "${TORCH_INDEX_URL}" \
+      "torch>=2,<3" && \
+    wheel="$(find /tmp -maxdepth 1 -name 'piper_tts-*.whl' -print -quit)" && \
+    pip3 install --no-cache-dir \
+      "piper-tts[http,ja,zh,nlp] @ file://${wheel}" && \
     rm -f "${wheel}"
 
 COPY docker/entrypoint.sh /

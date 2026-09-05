@@ -2,9 +2,9 @@
 
 ## Docker: quick start
 
-If you want to run Piper with Docker, run the four commands below. You do not
-need to create a `.venv`, install Python packages on the host, or mount a host
-directory.
+If you want to run Piper with Docker, run the five setup commands below. You do
+not need to create a `.venv`, install Python packages on the host, or mount a
+host directory.
 
 Run the commands from the project root:
 
@@ -15,31 +15,49 @@ docker build -t piper1-gpl:latest .
 # 2. Create the Docker-managed volume (run once)
 docker volume create piper-data
 
-# 3. Download a voice into the volume (run once per voice)
+# 3. Download the Stanza resources into the volume (run once)
+docker run --rm \
+  --mount type=volume,source=piper-data,target=/data \
+  piper1-gpl:latest stanza-download \
+  --languages ar en ja vi zh
+
+# 4. Download a voice into the volume (run once per voice)
 docker run --rm \
   --mount type=volume,source=piper-data,target=/data \
   piper1-gpl:latest download en_GB-cori-high
 
-# 4. Start the server
+# 5. Start the server
 docker run --name piper-server --rm \
   --mount type=volume,source=piper-data,target=/data \
   --publish 5000:5000 \
-  piper1-gpl:latest server --model en_GB-cori-high
+  piper1-gpl:latest server \
+  --linguistic-model-dir /data/stanza \
+  --model en_GB-cori-high
 ```
 
-Keep command 4 running, then open:
+Keep command 5 running. In a second terminal, verify that the prepared Stanza
+resources are used:
+
+```sh
+curl -f -X POST -H 'Content-Type: application/json' \
+  -d '{"text":"Xin chào, hôm nay thật tuyệt!"}' \
+  http://localhost:5000/analyze
+```
+
+The response should contain `"source": "stanza"`. Then open:
 
 ```text
 http://localhost:5000
 ```
 
-To stop the server, press `Ctrl+C`. To start it again, rerun command 4; the
+To stop the server, press `Ctrl+C`. To start it again, rerun command 5; the
 voice remains in the `piper-data` volume. `/data` is a private Docker-managed
 storage area, not a directory that you need to create or select on the host.
 
-Replace `en_GB-cori-high` with another voice in both command 3 and command 4
-when needed. The NLP/Stanza profile is optional and is not required for this
-default Docker flow.
+Replace `en_GB-cori-high` with another voice in commands 4 and 5 when needed.
+The standard Docker image includes the same NLP capability as the source setup;
+the one-time preparation command above stores the selected Stanza resources in
+the named volume.
 
 ## Install from PyPI
 
@@ -47,7 +65,7 @@ Install the HTTP server and all language-specific dependencies needed by the
 web UI's Auto Detect flow:
 
 ```sh
-python3 -m pip install 'piper-tts[http,ja,zh]'
+python3 -m pip install 'piper-tts[http,ja,zh,nlp]'
 ```
 
 If it is missing, `/synthesize` returns JSON error
@@ -109,12 +127,12 @@ python3.12 -m venv "${PIPER_TEMP_ROOT}/piper1-gpl-env"
 "${PIPER_TEMP_ROOT}/piper1-gpl-env/bin/python" -m pip install --upgrade pip
 "${PIPER_TEMP_ROOT}/piper1-gpl-env/bin/python" -m pip install '.[http,ja,zh,nlp]'
 
-# Download the optional Stanza resources used by the five pilot languages.
+# Download the Stanza resources used by the five pilot languages.
 PIPER_STANZA_DIR="${PIPER_TEMP_ROOT}/piper1-gpl-stanza"
 mkdir -p "${PIPER_STANZA_DIR}"
-PIPER_STANZA_DIR="${PIPER_STANZA_DIR}" \
-  "${PIPER_TEMP_ROOT}/piper1-gpl-env/bin/python" -c \
-  'import os, stanza; [stanza.download(lang, model_dir=os.environ["PIPER_STANZA_DIR"]) for lang in ("ar", "en", "ja", "vi", "zh")]'
+"${PIPER_TEMP_ROOT}/piper1-gpl-env/bin/python" -m piper.stanza_resources \
+  --model-dir "${PIPER_STANZA_DIR}" \
+  --languages ar en ja vi zh
 
 mkdir -p "${PIPER_TEMP_ROOT}/piper1-gpl-voices"
 "${PIPER_TEMP_ROOT}/piper1-gpl-env/bin/python" -m piper.download_voices \
@@ -147,11 +165,12 @@ python -m pip install --upgrade pip
 python -m pip install -e '.[http,ja,zh,dev,nlp]'
 ./script/dev_build
 
-# Download the optional Stanza resources used by the five pilot languages.
+# Download the Stanza resources used by the five pilot languages.
 PIPER_STANZA_DIR="${PWD}/local/stanza"
 mkdir -p "${PIPER_STANZA_DIR}"
-PIPER_STANZA_DIR="${PIPER_STANZA_DIR}" python -c \
-  'import os, stanza; [stanza.download(lang, model_dir=os.environ["PIPER_STANZA_DIR"]) for lang in ("ar", "en", "ja", "vi", "zh")]'
+python -m piper.stanza_resources \
+  --model-dir "${PIPER_STANZA_DIR}" \
+  --languages ar en ja vi zh
 
 mkdir -p local/voices
 python -m piper.download_voices \
@@ -188,11 +207,12 @@ python -m pip install --upgrade pip
 python -m pip install -e '.[http,ja,zh,dev,nlp]'
 ./script/dev_build
 
-# Download the optional Stanza resources used by the five pilot languages.
+# Download the Stanza resources used by the five pilot languages.
 PIPER_STANZA_DIR="${PIPER_TEMP_ROOT}/piper1-gpl-stanza"
 mkdir -p "${PIPER_STANZA_DIR}"
-PIPER_STANZA_DIR="${PIPER_STANZA_DIR}" python -c \
-  'import os, stanza; [stanza.download(lang, model_dir=os.environ["PIPER_STANZA_DIR"]) for lang in ("ar", "en", "ja", "vi", "zh")]'
+python -m piper.stanza_resources \
+  --model-dir "${PIPER_STANZA_DIR}" \
+  --languages ar en ja vi zh
 
 mkdir -p "${PIPER_TEMP_ROOT}/piper1-gpl-voices"
 python -m piper.download_voices \
@@ -210,8 +230,8 @@ python -m piper.http_server \
 
 Open `http://127.0.0.1:${PIPER_PORT}`.
 
-The three source setups above install the optional `nlp` extra and download
-Stanza resources for Arabic, English, Japanese, Vietnamese, and Chinese. The
+The three source setups above install the `nlp` extra and download Stanza
+resources for Arabic, English, Japanese, Vietnamese, and Chinese. The
 resources are stored in `PIPER_STANZA_DIR` and are used through
 `--linguistic-model-dir`; they are not downloaded by the web interface.
 
@@ -230,11 +250,11 @@ does not download or start the GGUF model, and this setup does not use Ollama.
 See [semantic-benchmark.md](semantic-benchmark.md) for the benchmark runner
 and model evaluation procedure.
 
-## Docker: detailed configuration and optional features
+## Docker: detailed configuration and features
 
 The quick-start flow at the beginning is sufficient to run the server. This
-section provides additional details about the named volume, NLP profile, and
-semantic provider.
+section provides additional details about the named volume, Stanza resources,
+and semantic provider.
 
 Build the image from the repository root:
 
@@ -242,8 +262,8 @@ Build the image from the repository root:
 docker build -t piper1-gpl .
 ```
 
-Piper stores downloaded voices, download coordination state, and optional
-linguistic resources in `/data`. Create one Docker-managed named volume and
+Piper stores downloaded voices, download coordination state, and linguistic
+resources in `/data`. Create one Docker-managed named volume and
 reuse it for every Piper command. These commands intentionally do not mount a
 host directory:
 
@@ -265,27 +285,17 @@ The container-side Piper port is 5000. Docker mappings use `host:container`, so
 supported Piper options such as `--port`, `--model`, and semantic-analysis
 options while keeping voice discovery and downloads in `/data`.
 
-### Optional Docker NLP profile
+### Stanza resource preparation
 
-The default image does not install Stanza, PyTorch, or any NLP dependency on the
-host. If linguistic analysis is needed, build a separate image profile; the
-installation remains entirely inside Docker:
-
-```sh
-docker build \
-  --build-arg PIPER_EXTRAS=http,ja,zh,nlp \
-  --tag piper1-gpl:nlp .
-```
-
-Stanza model resources are not baked into the NLP image. Prepare them in the
-same Docker-managed named volume:
+The standard image includes the Stanza runtime and its CPU-only PyTorch
+dependency. Stanza model resources are not baked into the image. Prepare them
+in the same Docker-managed named volume:
 
 ```sh
 docker run --rm \
   --mount type=volume,source=piper-data,target=/data \
-  --entrypoint python \
-  piper1-gpl:nlp -c \
-  'import stanza; [stanza.download(lang, model_dir="/data/stanza") for lang in ("ar", "en", "ja", "vi", "zh")]'
+  piper1-gpl stanza-download \
+  --languages ar en ja vi zh
 ```
 
 Then pass the existing resource directory option when starting Piper:
@@ -294,16 +304,15 @@ Then pass the existing resource directory option when starting Piper:
 docker run --name piper-server --rm \
   --mount type=volume,source=piper-data,target=/data \
   --publish 5000:5000 \
-  piper1-gpl:nlp server \
+  piper1-gpl server \
   --linguistic-model-dir /data/stanza \
   --model en_GB-cori-high
 ```
 
 If Stanza resources are absent, the server remains usable with its existing
-local fallback behavior. This optional profile is still a Docker-only install;
-it does not modify the host Python environment or require an external NLP
-service. The semantic provider is also disabled by default and is not bundled
-into either image. When enabled, its `llama.cpp` endpoint must be reachable
+local fallback behavior; `/analyze` reports that Stanza resources are
+unavailable. The semantic provider is disabled by default and is not bundled
+into the image. When enabled, its `llama.cpp` endpoint must be reachable
 from the container; non-loopback endpoints require the existing explicit
 privacy and external-endpoint options.
 
